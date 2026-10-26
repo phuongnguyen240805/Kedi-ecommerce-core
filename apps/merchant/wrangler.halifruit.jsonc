@@ -1,0 +1,86 @@
+// Halifruit backend only: Workers, Durable Objects SQLite and KV. No R2 or frontend assets.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "halifruit-backend",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-12-01",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MERCHANT",
+        "class_name": "MerchantDO"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "MerchantDO"
+      ]
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "KV_CACHE",
+      "id": "20d30647e325460f8af2d3a070c50955"
+    }
+  ],
+  "vars": {
+    "STORES_JSON": {
+      "default_store": "halifruit",
+      "stores": [
+        {
+          "id": "halifruit",
+          "name": "Halifruit"
+        },
+        {
+          "id": "printerval",
+          "name": "Printerval",
+          "settings": {
+            "PANCAKE_SHOP_ID": "715160501",
+            "PANCAKE_WAREHOUSE_ID": "17e77e47-689e-4b37-a55c-d1abbfba5d11",
+            "PANCAKE_VARIANT_TYPE": "digital",
+            "PANCAKE_SYNC_ENABLED": "true",
+            "CUSTOMER_PASSWORD_AUTH_ENABLED": "true"
+          }
+        }
+      ]
+    },
+    "AUTH0_DOMAIN": "dev-evnh786l2okr6m6u.us.auth0.com",
+    "AUTH0_AUDIENCE": "https://halifruit-backend.gofiber-phuongnguyen.workers.dev",
+    "STORE_NAME": "Halifruit",
+    "COMMERCE_CHECKOUT_ENABLED": "true",
+    "COMMERCE_ENVIRONMENT": "production",
+    "TECHCOMBANK_ACCOUNT_NUMBER": "50398838675",
+    "TECHCOMBANK_ACCOUNT_NAME": "NGUYEN XUAN PHUONG",
+    "PANCAKE_ORDER_SYNC_ENABLED": "true",
+    "PANCAKE_GHN_DISPATCH_ENABLED": "true",
+    "PANCAKE_GHN_ACCOUNT_ID": "745268",
+    "PANCAKE_PAYMENT_MAPPING_VERIFIED": "true",
+    "PANCAKE_SYNC_ENABLED": "true",
+    "IMAGES_URL": "",
+    "IMAGE_CDN_URL": "https://halifruit-cdn.gofiber-phuongnguyen.workers.dev",
+    "IMAGE_CDN_ALLOWED_HOSTS": "content.pancake.vn,statics.pancake.vn,images.unsplash.com,res.cloudinary.com"
+  },
+  "triggers": {
+    "crons": [
+      "*/5 * * * *"
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 0.1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
+  },
+  "dev": {
+    "port": 8787
+  }
+}

@@ -1,0 +1,71 @@
+# Copyright (c) 2026 Ronan LE MEILLAT
+# License: AGPL-3.0-or-later
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <http://www.gnu.org/licenses/>.
+#
+name: Init Merchant
+
+on:
+  workflow_dispatch: {}
+  workflow_call: {}
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  packages: write
+  attestations: write
+
+jobs:
+  init:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: "recursive"
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+    
+      - name: Install dependencies
+        run: |
+          npm i
+          npm i -g tsx
+          
+      - name: Initialize merchant
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          MERCHANT_PK: ${{ secrets.MERCHANT_PK }}
+          MERCHANT_SK: ${{ secrets.MERCHANT_SK }}
+        run: |
+          cd apps/merchant
+          npx tsx scripts/init.ts --remote
+    
+      - name: Init Stripe
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          MERCHANT_SK: ${{ secrets.MERCHANT_SK }}
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+        run: |
+          curl -X POST "$API_BASE_URL/v1/setup/stripe" \
+            -H "Authorization: Bearer $MERCHANT_SK" \
+            -H "Content-Type: application/json" \
+            -d "{\"stripe_secret_key\":\"$STRIPE_SECRET_KEY\",\"stripe_webhook_secret\":\"$STRIPE_WEBHOOK_SECRET\"}"

@@ -1,0 +1,288 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { unstable_dev } from 'wrangler';
+
+test(
+  'real Worker/DO checkout enforces auth, idempotency, evidence and private tracking',
+  { timeout: 90000 },
+  async () => {
+    const root = resolve(
+      fileURLToPath(new URL('../.wrangler/', import.meta.url)),
+    );
+    mkdirSync(root, { recursive: true });
+    const dir = mkdtempSync(join(root, 'commerce-runtime-'));
+    const main = join(dir, 'worker.ts'),
+      config = join(dir, 'wrangler.json');
+    const source = fileURLToPath(
+      new URL('../src/index.ts', import.meta.url),
+    ).replaceAll('\\', '/');
+    const lib = fileURLToPath(
+      new URL('../src/lib/', import.meta.url),
+    ).replaceAll('\\', '/');
+    writeFileSync(
+      main,
+      `
+ import original,{MerchantDO} from ${JSON.stringify(source)};
+ import {hashShipping,policyIdentity,shippingConfiguration,calculateShipping} from ${JSON.stringify(lib + 'smart-shipping.ts')};
+ import {pancakeRequest} from ${JSON.stringify(lib + 'commerce-pancake-api.ts')};
+ export {MerchantDO};
+ export default {async fetch(req,env,ctx){
+ if(new URL(req.url).pathname==='/__test/pos-boundary'){
+ const originalFetch=globalThis.fetch;let calls=0,redirectMode,simulateRedirect=false;
+ globalThis.fetch=async(url,init)=>{calls++;const nativeRequest=new Request(url,init);redirectMode=nativeRequest.redirect;
+ return simulateRedirect?new Response(null,{status:302,headers:{Location:'https://untrusted.invalid/'}}):Response.json({data:[]});};
+ try{const fake={PANCAKE_SHOP_ID:'fixture',PANCAKE_API_KEY:'fixture-secret'};
+ const result=await pancakeRequest(fake,'/orders');simulateRedirect=true;let rejected;
+ try{await pancakeRequest(fake,'/orders');}catch(error){rejected=error.code;}
+ return Response.json({result,calls,redirectMode,rejected});}finally{globalThis.fetch=originalFetch;}
+ }
+ if(new URL(req.url).pathname==='/__test/shipment-rpc'){
+ const stub=env.MERCHANT.getByName('default'),{order_id}=await req.json();
+ const before=(await stub.commerceReceipt(order_id)).value;
+ await stub.commerceClaim(order_id,'pos');await stub.commerceFinish(order_id,'pos',before.reference,null);
+ const first=await stub.commerceShipmentClaim(order_id,'shipping');
+ const concurrent=await stub.commerceShipmentClaim(order_id,'other');
+ await stub.commerceShipmentMark(order_id,'shipping',5,745268);
+ await stub.commerceShipmentFinish(order_id,'shipping',{tracking_number:'GHN-TEST-'+order_id,partner_id:5,account_id:745268,partner_status:'request_received'});
+ return Response.json({claimed:!!first.value,concurrent:concurrent.value,receipt:(await stub.commerceReceipt(order_id)).value,pending:await stub.commercePending()});
+ }
+ if(new URL(req.url).pathname!=='/__test/seed')return original.fetch(req,env,ctx);
+ const stub=env.MERCHANT.getByName('default'),input=await req.json();
+ await stub.commerceOverviewInit();
+ const keys=[['pk_fixture','public'],['sk_fixture','admin']];
+ for(const [key,role]of keys){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(key));const hash=Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('');await stub.run('INSERT OR IGNORE INTO api_keys(id,key_hash,key_prefix,role) VALUES(?,?,?,?)',[key,hash,key,role]);}
+ await stub.run("INSERT OR IGNORE INTO currencies(id,code,display_name,decimal_places) VALUES('vnd','VND','VND',0)");
+ await stub.run("INSERT OR IGNORE INTO products(id,title,status) VALUES('p','Apple','active')");
+ await stub.run("INSERT OR IGNORE INTO variants(id,product_id,sku,title,price_cents,currency,weight_g,status) VALUES('v','p','APPLE','Apple',100000,'VND',500,'active')");
+ await stub.run("INSERT OR IGNORE INTO variant_prices(id,variant_id,currency_id,price_cents) VALUES('vp','v','vnd',100000)");
+ await stub.run("INSERT OR IGNORE INTO warehouses(id,display_name,address_line1,city,postal_code,country_code) VALUES('local-w','Test','Address','City','','VN')");
+ await stub.run("INSERT OR IGNORE INTO pancake_links(shop_id,kind,source_id,target_id,seen_token) VALUES('shop','warehouse','w','local-w','1'),('shop','product','pos-p','p','1'),('shop','variation','pos-v','v','1')");
+ await stub.run("INSERT OR REPLACE INTO pancake_sync_state(shop_id,warehouse_id,last_completed_at) VALUES('shop','w',?)",[new Date().toISOString()]);
+ await stub.run("INSERT OR IGNORE INTO inventory(id,sku,on_hand,reserved) VALUES('i','APPLE',100,0)");
+ await stub.run("INSERT OR IGNORE INTO warehouse_inventory(id,sku,warehouse_id,on_hand,reserved) VALUES('wi','APPLE','local-w',100,0)");
+ await stub.run("INSERT INTO carts(id,customer_email,currency,expires_at,shipping_name,shipping_line1,shipping_city,shipping_country) VALUES(?,'guest@cart.invalid','VND',?,'Test User','12 Test Street','HCM','VN')",[input.cart_id,new Date(Date.now()+86400000).toISOString()]);
+ await stub.run("INSERT INTO cart_items(id,cart_id,sku,title,qty,unit_price_cents,currency) VALUES(?,?,'APPLE','Apple',2,100000,'VND')",[crypto.randomUUID(),input.cart_id]);
+ const cfg=shippingConfiguration(env),cart=(await stub.shippingCart(input.cart_id)).value;
+ const now=Date.now(),offer={id:'ghn:2',provider:'ghn',service_type_id:2,service_name:'Test',currency:'VND',carrier_fee_vnd:30000,subsidy_vnd:10000,customer_fee_vnd:20000,cod_value_vnd:input.payment_method==='cod'?220000:0,estimated_delivery_at:new Date(now+3600000).toISOString(),fee_breakdown:{total:30000},source:'carrier_api',environment:'staging'};
+ const result=await calculateShipping(cart,{cart_id:input.cart_id,destination:{district_id:3,ward_code:'0004'},payment_method:input.payment_method==='cod'?'cod':'prepaid'},cfg,[{code:'fixture',quote:async()=>({offers:[offer],warnings:[]})}]);
+ await stub.storeShippingQuote(result.quote);await stub.selectShippingQuote(input.cart_id,result.quote.id,offer.id,await hashShipping(policyIdentity(cfg)));
+ return Response.json({seeded:true});
+ }};
+ `,
+    );
+    writeFileSync(
+      config,
+      JSON.stringify({
+        name: 'commerce-runtime-test',
+        main,
+        compatibility_date: '2025-12-01',
+        durable_objects: {
+          bindings: [{ name: 'MERCHANT', class_name: 'MerchantDO' }],
+        },
+        migrations: [{ tag: 'v1', new_sqlite_classes: ['MerchantDO'] }],
+        kv_namespaces: [{ binding: 'KV_CACHE', id: '0'.repeat(32) }],
+        vars: {
+          COMMERCE_CHECKOUT_ENABLED: 'true',
+          COMMERCE_ENVIRONMENT: 'staging',
+          ORDER_TOKEN_SECRET: 'fixture-order-secret-at-least-32-characters',
+          TECHCOMBANK_ACCOUNT_NUMBER: '50398838675',
+          TECHCOMBANK_ACCOUNT_NAME: 'NGUYEN XUAN PHUONG',
+          PANCAKE_SHOP_ID: 'shop',
+          PANCAKE_WAREHOUSE_ID: 'w',
+          SMART_SHIPPING_ENABLED: 'true',
+          SMART_SHIPPING_POLICY: JSON.stringify({
+            version: 'fixture',
+            max_delivery_hours: 24,
+            subsidy_vnd: 10000,
+            parcel: {
+              length_cm: 25,
+              width_cm: 20,
+              height_cm: 15,
+              max_weight_g: 10000,
+            },
+          }),
+          GHN_ENVIRONMENT: 'staging',
+          GHN_TOKEN: 'fixture-token',
+          GHN_SHOP_ID: '1',
+          GHN_FROM_DISTRICT_ID: '2',
+          GHN_FROM_WARD_CODE: '0003',
+        },
+      }),
+    );
+    let worker: Awaited<ReturnType<typeof unstable_dev>> | undefined;
+    try {
+      worker = await unstable_dev(main, {
+        config,
+        local: true,
+        persist: false,
+        port: 0,
+        inspectorPort: 0,
+        logLevel: 'error',
+        experimental: {
+          testMode: true,
+          disableDevRegistry: true,
+          watch: false,
+          showInteractiveDevSession: false,
+        },
+      });
+      async function request(path: string, body?: unknown, key = 'sk_fixture') {
+        return worker!.fetch(path, {
+          method: body ? 'POST' : 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ' + key,
+          },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        });
+      }
+      const posBoundary = await request('/__test/pos-boundary');
+      assert.equal(posBoundary.status, 200);
+      assert.deepEqual(await posBoundary.json(), { result: { data: [] }, calls: 2, redirectMode: 'manual', rejected: 'pos_unavailable' });
+      assert.equal((await request('/v1/setup/init', { keys: [] })).status, 503);
+      for (const method of ['cod', 'techcombank_qr']) {
+        const input = {
+          cart_id: crypto.randomUUID(),
+          idempotency_key: crypto.randomUUID(),
+          payment_method: method,
+          customer_email: 'qa@example.test',
+          recipient: {
+            name: 'Test User',
+            phone: '0901234567',
+            address: '12 Test Street',
+            city: 'HCM',
+            district_id: 3,
+            ward_code: '0004',
+          },
+          expected_total_vnd: 220000,
+          note: '',
+        };
+        assert.equal((await request('/__test/seed', input)).status, 200);
+        const dispatchPath = '/v1/commerce/admin/orders/00000000-0000-4000-8000-000000000099/dispatch';
+        assert.equal((await request(dispatchPath, { evidence: 'Authorized dispatch fixture' }, 'pk_fixture')).status, 403);
+        assert.equal((await request(dispatchPath, { evidence: 'Authorized dispatch fixture' })).status, 404);
+        assert.equal(
+          (await request('/v1/commerce/checkout/confirm', input, 'pk_fixture'))
+            .status,
+          403,
+        );
+        const response = await request('/v1/commerce/checkout/confirm', input);
+        assert.equal(response.status, 200, await response.clone().text());
+        const order = (await response.json()) as Record<string, unknown>;
+        const repeat = await request('/v1/commerce/checkout/confirm', input);
+        assert.equal(
+          ((await repeat.json()) as Record<string, unknown>).order_id,
+          order.order_id,
+        );
+        const track = { order_id: order.order_id, token: order.tracking_token };
+        assert.equal(
+          (
+            await request(
+              '/v1/commerce/track',
+              { ...track, token: '0'.repeat(64) },
+              'pk_fixture',
+            )
+          ).status,
+          404,
+        );
+        const tracked = await request(
+          '/v1/commerce/track',
+          track,
+          'pk_fixture',
+        );
+        assert.equal(tracked.status, 200);
+        const body = await tracked.text();
+        assert.equal(body.includes('qa@example.test'), false);
+        assert.equal(body.includes('12 Test Street'), false);
+        assert.equal(tracked.headers.get('Cache-Control'), 'no-store');
+        if (method === 'techcombank_qr') {
+          assert.equal(order.payment_status, 'pending');
+          assert.equal(order.pos_sync_status, 'waiting_payment');
+          assert.match(String(order.qr_url), /techcombank-50398838675/);
+          const proof = {
+            transaction_id: 'TCB-runtime',
+            amount_vnd: 220000,
+            currency: 'VND',
+            reference: order.reference,
+            received_at: new Date().toISOString(),
+            evidence: 'Bank statement checked by fixture accountant',
+          };
+          const endpoint =
+            '/v1/commerce/admin/orders/' + order.order_id + '/bank_transfer';
+          assert.equal(
+            (await request(endpoint, proof, 'pk_fixture')).status,
+            403,
+          );
+          assert.equal((await request(endpoint, proof)).status, 200);
+          assert.equal((await request(endpoint, proof)).status, 200);
+          const paid = await request('/v1/commerce/track', track, 'pk_fixture');
+          assert.equal(
+            ((await paid.json()) as Record<string, unknown>).payment_status,
+            'paid',
+          );
+        }
+        assert.equal(
+          (
+            await request(
+              '/v1/commerce/admin/orders/' + order.order_id + '/sync-pos',
+              {},
+            )
+          ).status,
+          503,
+        );
+        const shipment = await request('/__test/shipment-rpc', { order_id: order.order_id });
+        assert.equal(shipment.status, 200);
+        const shipmentBody = await shipment.json() as { claimed: boolean; concurrent: unknown; receipt: Record<string, unknown>; pending: { order_id: string }[] };
+        assert.equal(shipmentBody.claimed, true);
+        assert.equal(shipmentBody.concurrent, null);
+        assert.equal(shipmentBody.receipt.shipment_status, 'booked');
+        assert.equal(shipmentBody.receipt.fulfillment_status, 'ready_to_ship');
+        assert.match(String(shipmentBody.receipt.tracking_number), /^GHN-TEST-/);
+        assert.equal(shipmentBody.receipt.payment_status, method === 'cod' ? 'unpaid' : 'paid');
+        assert.equal(shipmentBody.pending.some(item => item.order_id === order.order_id), false);
+      }
+      const specResponse = await request('/openapi.json');
+      assert.equal(specResponse.status, 200);
+      const spec = (await specResponse.json()) as {
+        openapi: string;
+        paths: Record<string, unknown>;
+        components: unknown;
+      };
+      const paths = Object.fromEntries(
+        Object.entries(spec.paths).filter(([path]) =>
+          path.startsWith('/v1/commerce/'),
+        ),
+      );
+      assert.ok(Object.keys(paths).length >= 10);
+      const reportRoot = fileURLToPath(
+        new URL('../../../outputs/commerce-qa/', import.meta.url),
+      );
+      mkdirSync(reportRoot, { recursive: true });
+      writeFileSync(
+        join(reportRoot, 'phase1-openapi.json'),
+        JSON.stringify(
+          {
+            openapi: spec.openapi,
+            info: {
+              title: 'Fufuni phase 1 local contract snapshot',
+              version: '2026-10-14',
+            },
+            paths,
+            components: spec.components,
+          },
+          null,
+          2,
+        ),
+      );
+    } finally {
+      await worker?.stop();
+      const resolved = resolve(dir);
+      assert.ok(
+        resolved.startsWith(root + '\\') || resolved.startsWith(root + '/'),
+      );
+      rmSync(resolved, { recursive: true, force: true });
+    }
+  },
+);

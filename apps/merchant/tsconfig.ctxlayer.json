@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["src/integrations/**/*.ts", "src/routes/ctxlayer.ts", "src/routes/pancake.ts", "src/lib/pancake-sync.ts"]
+}

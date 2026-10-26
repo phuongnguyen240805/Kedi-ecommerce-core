@@ -1,0 +1,175 @@
+# Copyright (c) 2026 Ronan LE MEILLAT
+# License: AGPL-3.0-or-later
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <http://www.gnu.org/licenses/>.
+#
+name: Reset and Reinitialize Demo
+
+on:
+#   schedule:
+#     - cron: "0 3 * * *" # Every day at 3am UTC --- Currently disabled to avoid unintended resets during development/testing
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  packages: write
+  attestations: write
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Obtain Auth0 M2M token and reset merchant database
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT_WITH_FUFUNI_SECRETS_ACCESS_RW }}
+          CURRENT_MGMT_TOKEN: ${{ secrets.AUTH0_MANAGEMENT_TOKEN }}
+        run: |
+          # Guard: mask only if the stored token is non-empty
+          [ -n "$CURRENT_MGMT_TOKEN" ] && echo "::add-mask::$CURRENT_MGMT_TOKEN"
+
+          # Guard: fail early with a clear message if the PAT secret is missing
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::GH_TOKEN is empty — ensure the secret GH_PAT_WITH_FUFUNI_SECRETS_ACCESS_RW is set in the repository"
+            exit 1
+          fi
+
+          # 1. Reuse stored management token if still valid for more than 7 days
+          NOW=$(date +%s)
+          THRESHOLD=$((NOW + 604800))
+          # Inline-env prefix exports JWT_TOKEN only to the python subprocess
+          EXP=$(JWT_TOKEN="$CURRENT_MGMT_TOKEN" python3 scripts/jwt-exp.py)
+
+          if [ "$EXP" -gt "$THRESHOLD" ]; then
+            echo "Reusing stored management token:"
+            JWT_TOKEN="$CURRENT_MGMT_TOKEN" python3 scripts/jwt-info.py
+            MGMT_TOKEN="$CURRENT_MGMT_TOKEN"
+          else
+            echo "Stored token expired or absent (exp=$EXP threshold=$THRESHOLD) — obtaining new 30-day management token..."
+            MGMT_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "https://${{ secrets.AUTH0_DOMAIN }}/oauth/token" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"client_id\":\"${{ secrets.AUTH0_MANAGEMENT_API_CLIENT_ID }}\",
+                \"client_secret\":\"${{ secrets.AUTH0_MANAGEMENT_API_CLIENT_SECRET }}\",
+                \"audience\":\"https://${{ secrets.AUTH0_DOMAIN }}/api/v2/\",
+                \"grant_type\":\"client_credentials\"
+              }")
+            MGMT_STATUS=$(echo "$MGMT_RESPONSE" | tail -1)
+            MGMT_BODY=$(echo "$MGMT_RESPONSE" | head -n -1)
+            echo "Auth0 management token request: HTTP $MGMT_STATUS"
+            if [ "$MGMT_STATUS" -ne 200 ]; then
+              echo "::error::Failed to obtain management token — Auth0 error: $(echo "$MGMT_BODY" | jq -r '.error_description // .error // "unknown"')"
+              exit 1
+            fi
+            MGMT_TOKEN=$(echo "$MGMT_BODY" | jq -r '.access_token')
+            echo "::add-mask::$MGMT_TOKEN"
+            echo "New management token claims:"
+            JWT_TOKEN="$MGMT_TOKEN" python3 scripts/jwt-info.py
+            # Persist new token as GitHub secret for future runs
+            echo "$MGMT_TOKEN" | gh secret set AUTH0_MANAGEMENT_TOKEN --repo "$GITHUB_REPOSITORY"
+            echo "AUTH0_MANAGEMENT_TOKEN secret updated."
+          fi
+
+          # 2. Ensure the client grant exists for AUTH0_AUDIENCE with both required scopes.
+          #    If it already exists (409), PATCH it to ensure scopes are up to date.
+          echo "Upserting client grant for audience ${{ secrets.AUTH0_AUDIENCE }}..."
+          GRANT_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "https://${{ secrets.AUTH0_DOMAIN }}/api/v2/client-grants" \
+            -H "Authorization: Bearer $MGMT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"client_id\":\"${{ secrets.AUTH0_MANAGEMENT_API_CLIENT_ID }}\",
+              \"audience\":\"${{ secrets.AUTH0_AUDIENCE }}\",
+              \"scope\":[\"${{ secrets.ADMIN_STORE_PERMISSION }}\",\"${{ secrets.DATABASE_PERMISSION }}\"]
+            }")
+          GRANT_STATUS=$(echo "$GRANT_RESPONSE" | tail -1)
+          GRANT_BODY=$(echo "$GRANT_RESPONSE" | head -n -1)
+          if [ "$GRANT_STATUS" -eq 201 ]; then
+            echo "Client grant created (HTTP 201)"
+          elif [ "$GRANT_STATUS" -eq 409 ]; then
+            echo "Grant already exists (409) — fetching grant ID to PATCH scopes..."
+            GRANT_ID=$(curl -s \
+              "https://${{ secrets.AUTH0_DOMAIN }}/api/v2/client-grants?client_id=${{ secrets.AUTH0_MANAGEMENT_API_CLIENT_ID }}&audience=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "${{ secrets.AUTH0_AUDIENCE }}")" \
+              -H "Authorization: Bearer $MGMT_TOKEN" | jq -r '.[0].id // empty')
+            if [ -z "$GRANT_ID" ]; then
+              echo "::error::Could not retrieve grant ID for PATCH"
+              exit 1
+            fi
+            PATCH_RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH "https://${{ secrets.AUTH0_DOMAIN }}/api/v2/client-grants/$GRANT_ID" \
+              -H "Authorization: Bearer $MGMT_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"scope\":[\"${{ secrets.ADMIN_STORE_PERMISSION }}\",\"${{ secrets.DATABASE_PERMISSION }}\"]}")
+            PATCH_STATUS=$(echo "$PATCH_RESPONSE" | tail -1)
+            PATCH_BODY=$(echo "$PATCH_RESPONSE" | head -n -1)
+            if [ "$PATCH_STATUS" -ge 200 ] && [ "$PATCH_STATUS" -lt 300 ]; then
+              echo "Grant patched (HTTP $PATCH_STATUS) — scopes: $(echo "$PATCH_BODY" | jq -r '.scope')"
+            else
+              echo "::error::PATCH grant failed (HTTP $PATCH_STATUS): $(echo "$PATCH_BODY" | jq -r '.message // .error // "unknown"')"
+              exit 1
+            fi
+          else
+            echo "::error::Unexpected grant response HTTP $GRANT_STATUS: $(echo "$GRANT_BODY" | jq -r '.message // .error // "unknown"')"
+            exit 1
+          fi
+
+          # 3. Obtain a fresh API token for AUTH0_AUDIENCE with DATABASE_PERMISSION scope
+          echo "Requesting API token for audience ${{ secrets.AUTH0_AUDIENCE }} with scope '${{ secrets.ADMIN_STORE_PERMISSION }} ${{ secrets.DATABASE_PERMISSION }}'..."
+          API_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "https://${{ secrets.AUTH0_DOMAIN }}/oauth/token" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"client_id\":\"${{ secrets.AUTH0_MANAGEMENT_API_CLIENT_ID }}\",
+              \"client_secret\":\"${{ secrets.AUTH0_MANAGEMENT_API_CLIENT_SECRET }}\",
+              \"audience\":\"${{ secrets.AUTH0_AUDIENCE }}\",
+              \"scope\":\"${{ secrets.ADMIN_STORE_PERMISSION }} ${{ secrets.DATABASE_PERMISSION }}\",
+              \"grant_type\":\"client_credentials\"
+            }")
+          API_STATUS=$(echo "$API_RESPONSE" | tail -1)
+          API_BODY=$(echo "$API_RESPONSE" | head -n -1)
+          echo "Auth0 API token request: HTTP $API_STATUS"
+          if [ "$API_STATUS" -ne 200 ]; then
+            echo "::error::Failed to obtain API token — Auth0 error: $(echo "$API_BODY" | jq -r '.error_description // .error // "unknown"')"
+            exit 1
+          fi
+          API_TOKEN=$(echo "$API_BODY" | jq -r '.access_token')
+          echo "::add-mask::$API_TOKEN"
+          echo "API token claims:"
+          JWT_TOKEN="$API_TOKEN" python3 scripts/jwt-info.py
+
+          # 4. Reset the merchant database
+          echo "Calling POST ${{ secrets.API_BASE_URL }}/v1/setup/reset ..."
+          RESET_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "${{ secrets.API_BASE_URL }}/v1/setup/reset" \
+            -H "Authorization: Bearer $API_TOKEN" \
+            -H "Content-Type: application/json")
+          RESET_STATUS=$(echo "$RESET_RESPONSE" | tail -1)
+          RESET_BODY=$(echo "$RESET_RESPONSE" | head -n -1)
+          echo "Reset returned HTTP $RESET_STATUS"
+          if [ "$RESET_STATUS" -lt 200 ] || [ "$RESET_STATUS" -ge 300 ]; then
+            echo "::error::Reset failed (HTTP $RESET_STATUS): $RESET_BODY"
+            exit 1
+          fi
+          echo "Reset successful: $RESET_BODY"
+
+  init:
+    needs: reset
+    uses: ./.github/workflows/init.yaml
+    secrets: inherit
+
+  seed:
+    needs: init
+    uses: ./.github/workflows/seed.yaml
+    secrets: inherit

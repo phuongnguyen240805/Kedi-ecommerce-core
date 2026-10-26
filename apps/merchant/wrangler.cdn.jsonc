@@ -1,0 +1,22 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "halifruit-cdn",
+  "main": "src/cdn/worker.ts",
+  "compatibility_date": "2026-10-13",
+  "workers_dev": true,
+  // Add the selected hostname here after its DNS zone is available in this account:
+  // "routes": [{ "pattern": "cdn.your-domain.vn", "custom_domain": true }],
+  "assets": {
+    "directory": ".wrangler/cdn-assets",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "vars": {
+    "IMAGE_CDN_ALLOWED_HOSTS": "content.pancake.vn,statics.pancake.vn,images.unsplash.com,res.cloudinary.com"
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 0.1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 }
+  }
+}

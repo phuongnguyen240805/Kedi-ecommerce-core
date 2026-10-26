@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/lib/stores.ts",
+    "src/lib/customer-sessions.ts",
+    "src/lib/pancake-source.ts",
+    "src/lib/pancake-store.ts",
+    "src/lib/pancake-sync.ts",
+    "src/routes/customer-sessions.ts",
+    "src/routes/storefront-content.ts",
+    "src/middleware/kv-cache.ts",
+    "src/middleware/customer-auth.ts",
+    "src/middleware/rate-limit.ts"
+  ]
+}
