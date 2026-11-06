@@ -81,6 +81,27 @@ describe('Pancake catalog persistence',()=>{
 });
 const config={PANCAKE_SHOP_ID:'1',PANCAKE_API_KEY:'secret-test',PANCAKE_WAREHOUSE_ID:warehouse.id};
 describe('Pancake API boundary',()=>{
+ it('reads a 927-variant catalog across all 31 pages before publishing',async()=>{
+  let calls=0;
+  mock.method(globalThis,'fetch',async(input)=>{
+   calls++;
+   const url=new URL(String(input));
+   if(url.pathname.endsWith('/warehouses'))return Response.json({success:true,data:[warehouse]});
+   const page=Number(url.searchParams.get('page_number'));
+   const start=(page-1)*30;
+   return Response.json({success:true,page_number:page,total_pages:31,total_entries:927,
+    data:Array.from({length:Math.min(30,927-start)},(_,i)=>({...row,id:`v${start+i}`}))});
+  });
+  const snapshot=await readPos(config);
+  assert.equal(snapshot.variations.length,927);
+  assert.equal(new Set(snapshot.variations.map(v=>v.id)).size,927);
+  assert.equal(calls,32);
+ });
+ it('retains a finite catalog bound instead of accepting unbounded pagination',async()=>{
+  mock.method(globalThis,'fetch',async(input)=>Response.json(String(input).includes('/warehouses')?
+   {success:true,data:[warehouse]}:{success:true,data:[row],total_pages:167,total_entries:5001,page_number:1}));
+  await assert.rejects(readPos(config),/5000-variant limit/);
+ });
  it('reads all pages before returning a validated snapshot',async()=>{
   let calls=0;mock.method(globalThis,'fetch',async()=>{calls++;
    return Response.json(calls===1?{success:true,data:[warehouse]}:calls===2?

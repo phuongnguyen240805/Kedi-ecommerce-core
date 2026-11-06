@@ -5,9 +5,12 @@ import { fileURLToPath } from 'node:url';
 const project = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const source = path.resolve(process.argv[2] || process.env.HALIFRUIT_PUBLIC_DIR || '');
 if (!process.argv[2] && !process.env.HALIFRUIT_PUBLIC_DIR) throw new Error('Provide the Halifruit frontend public directory');
-const destination = path.join(project, '.wrangler', 'cdn-assets');
+const store = process.argv[3] || 'halifruit';
+if (!['halifruit', 'printerval'].includes(store)) throw new Error('Unsupported CDN store');
+const assetDirectory = store === 'printerval' ? 'printerval-cdn-assets' : 'cdn-assets';
+const destination = path.join(project, '.wrangler', assetDirectory);
 // Only remove this fixed generated directory, never a caller-supplied path.
-if (destination !== path.resolve(project, '.wrangler/cdn-assets') || source.startsWith(destination)) throw new Error('Invalid asset directory');
+if (destination !== path.resolve(project, '.wrangler', assetDirectory) || source.startsWith(destination)) throw new Error('Invalid asset directory');
 await readdir(source); // Verify the source exists before removing the previous snapshot.
 await rm(destination, { recursive: true, force: true });
 let count = 0;
@@ -25,4 +28,4 @@ async function copyImages(directory, relative = '') {
 await copyImages(source);
 await mkdir(destination, { recursive: true });
 await writeFile(path.join(destination, '_headers'), '/*\n  Cache-Control: public, max-age=3600\n  Access-Control-Allow-Origin: *\n  X-Content-Type-Options: nosniff\n');
-console.log(`Prepared ${count} public images for the Halifruit CDN (no R2).`);
+console.log(`Prepared ${count} public images for the ${store} CDN (no R2).`);

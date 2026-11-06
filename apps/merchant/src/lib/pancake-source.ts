@@ -66,12 +66,13 @@ export async function readPos(env:PosConfig) {
   if(!warehouseResult.success)throw new PancakeError('schema','Invalid Pancake warehouse response');
   const warehouse=warehouseResult.data.data.find(w=>w.id===config.warehouseId);
   if(!warehouse||warehouse.allow_create_order===false)throw new PancakeError('warehouse','Configured Pancake warehouse is unavailable');
-  const schema=z.object({success:z.literal(true),data:z.array(variationSchema),total_pages:z.number().int().min(0).max(20),
-    total_entries:z.number().int().min(0).max(600),page_number:z.number().int().positive()});
+  const maxVariants=5000;
+  const schema=z.object({success:z.literal(true),data:z.array(variationSchema),total_pages:z.number().int().min(0).max(Math.ceil(maxVariants/30)),
+    total_entries:z.number().int().min(0).max(maxVariants),page_number:z.number().int().positive()});
   const variations:PosVariation[]=[];let total:number|undefined;let pages:number|undefined;
   for(let page=1;page<=(pages??1);page++){
     const result=schema.safeParse(await posGet(config,'products/variations',{page_size:'30',page_number:String(page)}));
-    if(!result.success)throw new PancakeError('schema','Invalid Pancake catalog or catalog exceeds 600-variant limit');
+    if(!result.success)throw new PancakeError('schema','Invalid Pancake catalog or catalog exceeds 5000-variant limit');
     const body=result.data;
     if(body.page_number!==page||(total!==undefined&&(body.total_entries!==total||body.total_pages!==pages)))
       throw new PancakeError('pagination','Pancake catalog changed while reading; retry sync');

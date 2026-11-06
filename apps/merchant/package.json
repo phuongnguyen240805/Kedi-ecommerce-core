@@ -17,6 +17,7 @@
     "deploy:halifruit": "wrangler deploy --config wrangler.halifruit.jsonc --secrets-file .wrangler/halifruit.deploy-secrets.json",
     "cdn:prepare": "node scripts/prepare-cdn-assets.mjs",
     "deploy:cdn": "wrangler deploy --config wrangler.cdn.jsonc",
+    "deploy:cdn:printerval": "wrangler deploy --config wrangler.printerval-cdn.jsonc",
     "cdn:typegen": "wrangler types --config wrangler.cdn.jsonc --include-runtime=false --env-interface CdnBindings --strict-vars=false src/cdn/bindings.d.ts",
     "test:cdn": "node --import tsx --test tests/image-cdn.test.ts",
     "gen:openapi": "bash -c 'source ../../.env && wrangler dev --port 8787 & PID=$! && for i in $(seq 1 30); do sleep 1 && curl -sf http://localhost:8787/openapi.json > ../../openapi.json && echo \"\\n✓ Generated openapi.json\" && kill $PID && exit 0; done; echo \"\\n✗ wrangler did not respond\" && kill $PID && exit 1'",

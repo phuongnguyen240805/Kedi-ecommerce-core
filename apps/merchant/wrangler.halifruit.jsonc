@@ -41,7 +41,9 @@
           "settings": {
             "PANCAKE_SHOP_ID": "715160501",
             "PANCAKE_WAREHOUSE_ID": "17e77e47-689e-4b37-a55c-d1abbfba5d11",
-            "PANCAKE_VARIANT_TYPE": "digital",
+            "PANCAKE_VARIANT_TYPE": "physical",
+            "IMAGE_CDN_URL": "https://printerval-cdn.gofiber-phuongnguyen.workers.dev",
+            "IMAGE_CDN_ALLOWED_HOSTS": "content.pancake.vn,statics.pancake.vn,images.unsplash.com,res.cloudinary.com,cdn-printerval.prtvstatic.com,asset.prtvstatic.com",
             "PANCAKE_SYNC_ENABLED": "true",
             "CUSTOMER_PASSWORD_AUTH_ENABLED": "true"
           }
