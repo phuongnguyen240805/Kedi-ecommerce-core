@@ -15,6 +15,10 @@ auth_spec = importlib.util.spec_from_file_location('verify_deploy', SCRIPT.with_
 auth = importlib.util.module_from_spec(auth_spec)
 auth_spec.loader.exec_module(auth)
 
+kv_spec = importlib.util.spec_from_file_location('resolve_kv', SCRIPT.with_name('resolve-deploy-kv.py'))
+kv = importlib.util.module_from_spec(kv_spec)
+kv_spec.loader.exec_module(kv)
+
 class DeploymentConfigTests(unittest.TestCase):
     def test_ci_credentials_are_not_worker_secrets_but_ai_decryption_key_is_preserved(self):
         result = generator.runtime_secrets({
@@ -79,6 +83,26 @@ class DeploymentConfigTests(unittest.TestCase):
             auth.verify('wrong-account-id', token)
         with self.assertRaises(ValueError):
             auth.verify('a'*32, ' '+token)
+
+class KvReuseTests(unittest.TestCase):
+    def test_existing_namespace_reused_after_paginated_lookup(self):
+        calls=[]
+        def opener(request,timeout):
+            calls.append(request)
+            rows=[] if len(calls)==1 else [{'title':'merchant-kv-cache','id':'b'*32}]
+            return io.BytesIO(json.dumps({'success':True,'result':rows,'result_info':{'total_pages':2}}).encode())
+        config={'name':'merchant','kv_namespaces':[{'binding':'KV_CACHE'}]}
+        result=kv.resolve(config,'a'*32,'fixture',opener)
+        self.assertEqual(result['kv_namespaces'][0]['id'],'b'*32)
+        self.assertEqual(len(calls),2)
+        self.assertTrue(all(r.get_method()=='GET' for r in calls))
+
+    def test_explicit_id_preserved_and_missing_namespace_left_to_wrangler(self):
+        config={'name':'merchant','kv_namespaces':[{'binding':'KV_CACHE','id':'c'*32}]}
+        self.assertEqual(kv.resolve(config,'a'*32,'fixture',lambda *args: self.fail('No lookup needed')),config)
+        empty=lambda request,timeout:io.BytesIO(json.dumps({'success':True,'result':[]}).encode())
+        fresh=kv.resolve({'name':'merchant','kv_namespaces':[{'binding':'KV_CACHE'}]},'a'*32,'fixture',empty)
+        self.assertNotIn('id',fresh['kv_namespaces'][0])
 
 if __name__ == '__main__':
     unittest.main()
