@@ -39,7 +39,7 @@ import { INTEGRATION_SCHEMA, integrationState, type StateCommand } from './integ
 import { beginMcpRun, commitMcpRun, failMcpRun, type RunContext } from './integrations/pancake/sync-runs';
 import {SHIPPING_SCHEMA,shippingResult,beginShippingQuote,loadShippingCart,storeShippingQuote,selectShippingQuote,readShippingSelection,clearShippingSelection} from './lib/shipping-store';
 import type {StoredShippingQuote} from './lib/smart-shipping';
-import {ensureSchemaObjects, ensureStoreThemeDefaults} from './lib/sql-schema';
+import {ensureSchemaObjects, ensureStoreThemeDefaults, ensureLegacyRoutingColumns} from './lib/sql-schema';
 import {authorizeShipment,claimShipment,markShipmentAttempt,finishShipment,type ShipmentResult} from './lib/commerce-shipment-store';
 import {COMMERCE_SCHEMA,replayCheckout,confirmCheckout,receipt,recordEvidence,updateFulfillment,claimOutbox,finishOutbox,markCreateAttempt,cancelPendingOrder,resolveBankException,bankResolutionInput,type CheckoutInput,type CheckoutConfig,type EvidenceInput,fulfillmentInput} from './lib/commerce-core';
 import {SERVICE_SCHEMA,serviceActionAccess,assertLegacyResolution,expireServiceHold,reconcileServicePayment,adjustmentInput,recordAddressAdjustment,serviceNotificationClaim,serviceNotificationFinish,serviceRecovery,storeServiceEvidence,readServiceEvidence,serviceDetail,serviceQueue,serviceSnapshot,createServiceRequest,decideServiceRequest,createRefund,recordRefundResult,startActionSession,verifyActionSession,assertActionSession,assertNoOpenChanges,storeAddressQuote,requestInput,decisionInput,refundInput,refundResultInput} from './lib/commerce-service';
@@ -742,6 +742,7 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
 
   private ensureInitialized(): void {
     if (this.initialized) return;
+    ensureLegacyRoutingColumns(this.sql);
     ensureSchemaObjects(this.sql,SCHEMA);
     ensureSchemaObjects(this.sql,PANCAKE_SCHEMA);
     ensureSchemaObjects(this.sql,CUSTOMER_SESSION_SCHEMA);

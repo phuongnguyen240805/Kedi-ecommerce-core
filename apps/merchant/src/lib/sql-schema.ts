@@ -27,3 +27,14 @@ export function ensureStoreThemeDefaults(sql: {
       theme.id, theme.name, theme.active, JSON.stringify(theme.config));
   }
 }
+
+/** Repair nullable routing metadata in pre-region databases before base indexes run. */
+export function ensureLegacyRoutingColumns(sql:{exec:(query:string)=>{toArray:()=>Record<string,unknown>[]}}){
+  const tables=new Set(sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray().map(row=>String(row.name)));
+  const additions:Record<string,string[]>={carts:['region_id','shipping_country'],orders:['region_id','warehouse_id','viewtoken'],customers:['auth_provider_id']};
+  for(const [table,names] of Object.entries(additions)){
+    if(!tables.has(table))continue;
+    const columns=new Set(sql.exec('PRAGMA table_info('+table+')').toArray().map(row=>String(row.name)));
+    for(const name of names)if(!columns.has(name))sql.exec('ALTER TABLE '+table+' ADD COLUMN '+name+' TEXT');
+  }
+}
