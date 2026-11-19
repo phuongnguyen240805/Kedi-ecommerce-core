@@ -56,7 +56,7 @@ class DeploymentConfigTests(unittest.TestCase):
         self.assertTrue(config['observability']['traces']['enabled'])
         for namespace in config['kv_namespaces']:
             self.assertNotIn('id', namespace)
-        self.assertTrue(all('bucket_name' not in b for b in config['r2_buckets']))
+        self.assertFalse(config.get('r2_buckets'), 'UCP-only deployment must not provision R2 before account activation')
 
     def test_authorization_preflight_is_read_only_and_binds_selected_account(self):
         account = 'a'*32
