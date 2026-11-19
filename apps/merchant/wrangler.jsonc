@@ -2,7 +2,6 @@
   "name": "merchant",
   "main": "src/index.ts",
   "compatibility_date": "2025-12-01",
-
   "durable_objects": {
     "bindings": [
       {
@@ -11,14 +10,14 @@
       }
     ]
   },
-
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["MerchantDO"]
+      "new_sqlite_classes": [
+        "MerchantDO"
+      ]
     }
   ],
-
   "r2_buckets": [
     {
       "binding": "IMAGES"
@@ -27,21 +26,29 @@
       "binding": "DIGITAL_ASSETS_BUCKET"
     }
   ],
-	"kv_namespaces": [
-		{
-			"binding": "KV_CACHE",
-			"id": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
-		}
-	],
+  "kv_namespaces": [
+    {
+      "binding": "KV_CACHE"
+    }
+  ],
   "vars": {
     "IMAGES_URL": ""
   },
-
   "triggers": {
-    "crons": ["*/15 * * * *"]
+    "crons": [
+      "*/15 * * * *"
+    ]
   },
-
   "dev": {
     "port": 8787
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "observability": {
+    "enabled": true,
+    "traces": {
+      "enabled": true
+    }
   }
 }

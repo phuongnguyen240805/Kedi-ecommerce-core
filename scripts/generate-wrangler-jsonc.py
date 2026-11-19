@@ -38,7 +38,11 @@ def strip_jsonc_comments(text: str) -> str:
     text = re.sub(r'//[^\n]*', '', text)
     return text
 
-# All .env variables will be treated as secrets in generated wrangler.jsonc.
+# Deployment credentials configure CI only; do not grant them to deployed application code.
+CI_ONLY_KEYS = {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "KV_CACHE_ID", "CLOUDFLARE_USE_PAGE_DEV_DOMAIN"}
+
+def runtime_secrets(env):
+    return {key: value for key, value in env.items() if key not in CI_ONLY_KEYS and value.strip()}
 
 def load_env(env_path):
     if not os.path.exists(env_path):
@@ -91,9 +95,12 @@ def main():
     current_vars = dict(wrangler_config.get("vars", {}))
 
     # Treat all environment variables as secrets into required list for wrangler config.
-    required_secrets = sorted(env_vars.keys())
+    app_secrets = runtime_secrets(env_vars)
+    required_secrets = sorted(app_secrets.keys())
     if required_secrets:
         wrangler_config["secrets"] = {"required": required_secrets}
+    else:
+        wrangler_config.pop("secrets", None)
 
     # Ensure kv_namespaces exist and set KV_CACHE id if available.
     kv_namespaces = wrangler_config.get("kv_namespaces", [])
@@ -133,7 +140,7 @@ def main():
     # Create secrets.json file for wrangler secret bulk command.
     secrets_json_path = os.path.join(os.path.dirname(output_path), "secrets.json")
     with open(secrets_json_path, "w", encoding="utf-8") as f:
-        json.dump(env_vars, f, indent=2, ensure_ascii=False)
+        json.dump(app_secrets, f, indent=2, ensure_ascii=False)
 
     print(f"Generated wrangler config at: {output_path}")
     print(f"Generated secrets bulk file at: {secrets_json_path}")
