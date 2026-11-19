@@ -172,6 +172,9 @@ adminApp.openapi(updateOrder, async (c) => {
   if (!order) throw ApiError.notFound('Order not found');
 
   const updates: string[] = [];
+  const commerceOrder = await db.query('SELECT name FROM sqlite_master WHERE type=\'table\' AND name=\'commerce_orders\'');
+  if (commerceOrder.length && (await db.query('SELECT order_id FROM commerce_orders WHERE order_id=?',[orderId])).length)
+    throw ApiError.conflict('Commerce orders must use the commerce operations API; direct status/tracking edits are disabled.');
   const params: unknown[] = [];
 
   if (status !== undefined) {
@@ -217,7 +220,7 @@ adminApp.openapi(updateOrder, async (c) => {
     const emailableStatuses: OrderEmailEvent[] = ['processing', 'shipped', 'delivered', 'refunded', 'canceled'];
     if (emailableStatuses.includes(status as OrderEmailEvent)) {
       c.executionCtx.waitUntil(
-        sendOrderStatusEmail(c.env, c.var.db, orderId, status as OrderEmailEvent).catch(() => {}),
+        sendOrderStatusEmail(c.env, db, orderId, status as OrderEmailEvent).catch(() => {}),
       );
     }
   }
@@ -326,6 +329,9 @@ adminApp.openapi(refundOrder, async (c) => {
   if (!order.stripe_payment_intent_id) {
     throw ApiError.invalidRequest('Cannot refund test orders (no Stripe payment)');
   }
+  const hasCommerce = await db.query('SELECT name FROM sqlite_master WHERE type=\'table\' AND name=\'commerce_orders\'');
+  if (hasCommerce.length && (await db.query('SELECT order_id FROM commerce_orders WHERE order_id=?',[orderId])).length)
+    throw ApiError.conflict('Commerce refunds must use the commerce refund ledger.');
 
   const stripe = new Stripe(stripeSecretKey);
 
@@ -407,12 +413,12 @@ adminApp.openapi(listRefunds, async (c) => {
   const [order] = await db.query<{ id: string }>(`SELECT id FROM orders WHERE id = ?`, [orderId]);
   if (!order) throw ApiError.notFound('Order not found');
 
-  const refunds = await db.query(
+  const refunds = await db.query<{id:string;stripe_refund_id:string;amount_cents:number;currency:string;reason:string|null;notes:string|null;status:string;created_at:string}>(
     `SELECT id, stripe_refund_id, amount_cents, currency, reason, notes, status, created_at
      FROM refunds WHERE order_id = ? ORDER BY created_at DESC`,
     [orderId]
   );
-  return c.json(refunds);
+  return c.json(refunds, 200);
 });
 
 const createTestOrder = createRoute({

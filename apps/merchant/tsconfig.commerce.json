@@ -1,4 +1,4 @@
 {
   "extends": "./tsconfig.json",
-  "include": ["src/lib/commerce-*.ts", "src/routes/commerce.ts"]
+  "include": ["src/lib/commerce-*.ts", "src/routes/commerce.ts", "src/routes/commerce-service.ts"]
 }

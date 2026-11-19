@@ -1,3 +1,4 @@
+import * as shippingFlow from './lib/shipping-workflow';
 /**
  * MIT License
  *
@@ -24,6 +25,11 @@
  */
 
 import { DurableObject } from 'cloudflare:workers';
+import { UCP_PAYMENT_SCHEMA, beginUcpPayment, attachUcpPayment, settleUcpPayment, type SettlementInput } from './lib/ucp-payment';
+import {POD_SCHEMA,approvePodArtwork,podQuotePlan,storePodQuote,checkoutPodQuote,claimPodFulfillment,finishPodFulfillment,type PodQuoteInput} from './lib/pod-core';
+import {MARKETING_SCHEMA,subscribeMarketing,confirmMarketing,unsubscribeMarketing,planMarketing,claimMarketing,marketingEligible,finishMarketing,recordMarketingEvent,type SubscriptionInput} from './lib/marketing-core';
+import {FEED_SCHEMA,feedSnapshot,putFeedOffer,type FeedOffer} from './lib/product-feeds';
+import {SHOPPING_SCHEMA,consumeShopping,allowShoppingAi,type ShoppingSelection} from './lib/shopping';
 import { STOREFRONT_CONTENT_SCHEMA } from './lib/storefront-content';
 import { CUSTOMER_SESSION_SCHEMA } from './lib/customer-sessions';
 import { PANCAKE_SCHEMA, acquirePosLease, applyPosSnapshot, finishPosError } from './lib/pancake-store';
@@ -35,6 +41,7 @@ import type {StoredShippingQuote} from './lib/smart-shipping';
 import {ensureSchemaObjects, ensureStoreThemeDefaults} from './lib/sql-schema';
 import {authorizeShipment,claimShipment,markShipmentAttempt,finishShipment,type ShipmentResult} from './lib/commerce-shipment-store';
 import {COMMERCE_SCHEMA,replayCheckout,confirmCheckout,receipt,recordEvidence,updateFulfillment,claimOutbox,finishOutbox,markCreateAttempt,cancelPendingOrder,resolveBankException,bankResolutionInput,type CheckoutInput,type CheckoutConfig,type EvidenceInput,fulfillmentInput} from './lib/commerce-core';
+import {SERVICE_SCHEMA,serviceActionAccess,assertLegacyResolution,expireServiceHold,reconcileServicePayment,adjustmentInput,recordAddressAdjustment,serviceNotificationClaim,serviceNotificationFinish,serviceRecovery,storeServiceEvidence,readServiceEvidence,serviceDetail,serviceQueue,serviceSnapshot,createServiceRequest,decideServiceRequest,createRefund,recordRefundResult,startActionSession,verifyActionSession,assertActionSession,assertNoOpenChanges,storeAddressQuote,requestInput,decisionInput,refundInput,refundResultInput} from './lib/commerce-service';
 import type {z} from 'zod';
 
 export interface MerchantEnv {
@@ -1385,6 +1392,46 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
     return { changes: result.changes };
   }
 
+  ucpPaymentBegin(id: string, successUrl: string, cancelUrl: string) {
+    this.ensureInitialized(); ensureSchemaObjects(this.sql, UCP_PAYMENT_SCHEMA);
+    return this.ctx.storage.transactionSync(() => beginUcpPayment(this.sql, id, successUrl, cancelUrl));
+  }
+  ucpPaymentAttach(id: string, stripeId: string, url: string) {
+    this.ensureInitialized(); ensureSchemaObjects(this.sql, UCP_PAYMENT_SCHEMA);
+    return this.ctx.storage.transactionSync(() => attachUcpPayment(this.sql, id, stripeId, url));
+  }
+  ucpPaymentSettle(input: SettlementInput) {
+    this.ensureInitialized(); ensureSchemaObjects(this.sql, UCP_PAYMENT_SCHEMA);
+    ensureSchemaObjects(this.sql, POD_SCHEMA);
+    return this.ctx.storage.transactionSync(() => settleUcpPayment(this.sql, input));
+  }
+  podInit() { this.ensureInitialized(); ensureSchemaObjects(this.sql,POD_SCHEMA); }
+  feedSnapshot(){this.podInit();ensureSchemaObjects(this.sql,FEED_SCHEMA);return this.ctx.storage.transactionSync(()=>feedSnapshot(this.sql));}
+  shoppingAiAllow(client:string){this.ensureInitialized();ensureSchemaObjects(this.sql,SHOPPING_SCHEMA);return this.ctx.storage.transactionSync(()=>allowShoppingAi(this.sql,client));}
+  shoppingConsume(id:string,selection:ShoppingSelection,expiresAt:number){this.podInit();ensureSchemaObjects(this.sql,FEED_SCHEMA);ensureSchemaObjects(this.sql,SHOPPING_SCHEMA);return this.ctx.storage.transactionSync(()=>consumeShopping(this.sql,feedSnapshot(this.sql).offers,id,selection,expiresAt));}
+  feedPut(sku:string,config:FeedOffer,storeUrl:string){this.podInit();ensureSchemaObjects(this.sql,FEED_SCHEMA);return this.ctx.storage.transactionSync(()=>putFeedOffer(this.sql,sku,config,storeUrl));}
+  marketingInit(){this.podInit();ensureSchemaObjects(this.sql,MARKETING_SCHEMA);}
+  marketingSubscribe(input:SubscriptionInput,policy:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>subscribeMarketing(this.sql,input,policy));}
+  marketingConfirm(id:string,nonce:string,policy:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>confirmMarketing(this.sql,id,nonce,policy));}
+  marketingUnsubscribe(id:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>unsubscribeMarketing(this.sql,id));}
+  marketingPlan(){this.marketingInit();return this.ctx.storage.transactionSync(()=>planMarketing(this.sql));}
+  marketingClaim(token:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>claimMarketing(this.sql,token));}
+  marketingEligible(id:string,token:string){this.marketingInit();return marketingEligible(this.sql,id,token);}
+  marketingFinish(id:string,token:string,outcome:Parameters<typeof finishMarketing>[3],providerId?:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>finishMarketing(this.sql,id,token,outcome,providerId));}
+  marketingEvent(input:Parameters<typeof recordMarketingEvent>[1]){this.marketingInit();return this.ctx.storage.transactionSync(()=>recordMarketingEvent(this.sql,input));}
+  podDue() { this.podInit();return this.sql.exec("SELECT id FROM pod_fulfillments WHERE state IN ('queued','accepted','shipped','submission_unknown') AND lease_until<? ORDER BY updated_at LIMIT 10",Date.now()).toArray().map(r=>({id:String(r.id)})); }
+  podApprove(id:string,evidence:string) {this.podInit();return this.ctx.storage.transactionSync(()=>approvePodArtwork(this.sql,id,evidence));}
+  podPlan(input:PodQuoteInput) {this.podInit();return podQuotePlan(this.sql,input);}
+  podStoreQuote(plan:ReturnType<typeof podQuotePlan>,shipping:number) {
+    this.podInit();return this.ctx.storage.transactionSync(()=>storePodQuote(this.sql,plan,shipping));
+  }
+  podCheckout(cartId:string,quoteId:string,expected:number) {
+    this.podInit();return this.ctx.storage.transactionSync(()=>checkoutPodQuote(this.sql,cartId,quoteId,expected));
+  }
+  podClaim(id:string,token:string) {this.podInit();return this.ctx.storage.transactionSync(()=>claimPodFulfillment(this.sql,id,token));}
+  podFinish(id:string,token:string,result:Parameters<typeof finishPodFulfillment>[3]) {
+    this.podInit();return this.ctx.storage.transactionSync(()=>finishPodFulfillment(this.sql,id,token,result));
+  }
   ctxlayerState(input:StateCommand) {
     this.ensureInitialized(); ensureSchemaObjects(this.sql,INTEGRATION_SCHEMA);
     return this.ctx.storage.transactionSync(()=>integrationState(this.sql,input));
@@ -1425,15 +1472,68 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
   private ensureCommerceStorage() {
     this.ensureShippingStorage();
     ensureSchemaObjects(this.sql,COMMERCE_SCHEMA);
+    ensureSchemaObjects(this.sql,SERVICE_SCHEMA);
+    ensureSchemaObjects(this.sql,shippingFlow.SHIPPING_WORKFLOW_SCHEMA);
   }
+
+  shippingBootstrap(id:string,enabled:boolean) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>{
+    const leg=shippingFlow.ensureOutboundLeg(this.sql,id);
+    if(leg.owner==='direct'&&enabled&&!leg.tracking_code&&!this.sql.exec("SELECT id FROM shipping_commands WHERE leg_id=? AND kind='create'",leg.id).toArray().length){
+      shippingFlow.enqueueShippingCommand(this.sql,{leg_id:leg.id,kind:'create',idempotency_key:crypto.randomUUID()},'shipping-automation');
+    }
+    return leg;
+  }));}
+  shippingOverview(id:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>shippingFlow.shippingOverview(this.sql,id)));}
+  shippingEnqueue(input:shippingFlow.ShippingCommandInput,actor:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>shippingFlow.enqueueShippingCommand(this.sql,input,actor)));}
+  shippingClaim(id:string,token:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>shippingFlow.claimShippingCommand(this.sql,id,token)));}
+  shippingMark(id:string,token:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>shippingFlow.markShippingAttempt(this.sql,id,token)));}
+  shippingObserve(id:string,observation:shippingFlow.CarrierObservation,token?:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>shippingFlow.observeShipping(this.sql,id,observation,Date.now(),token)));}
+  shippingFinish(id:string,token:string,state:Parameters<typeof shippingFlow.finishShippingCommand>[3],result:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>shippingFlow.finishShippingCommand(this.sql,id,token,state,result)));}
+  shippingDue() {this.ensureCommerceStorage();return shippingFlow.shippingDue(this.sql);}
+  shippingReceive(input:Parameters<typeof shippingFlow.receiveShippingEvent>[1]) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>shippingFlow.receiveShippingEvent(this.sql,input)));}
+  shippingEventsDue() {this.ensureCommerceStorage();return shippingFlow.shippingEventsDue(this.sql);}
+  shippingLinkEvent(id:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>shippingFlow.linkShippingEvent(this.sql,id)));}
+  shippingFinishEvent(id:string,success:boolean) {this.ensureCommerceStorage();shippingFlow.finishShippingEvent(this.sql,id,success);}
+  shippingPollClaim(id:string,token:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>shippingFlow.claimShippingPoll(this.sql,id,token)));}
+  shippingPollFinish(id:string,token:string,error:string|null) {this.ensureCommerceStorage();shippingFlow.finishShippingPoll(this.sql,id,token,error);}
+  shippingPollDue() {this.ensureCommerceStorage();return this.sql.exec("SELECT * FROM shipping_legs WHERE status NOT IN ('delivered','returned','cancel','exception','lost','damage','scrap') AND next_poll_at<=? AND lease_until<=? AND (tracking_code IS NOT NULL OR EXISTS(SELECT 1 FROM shipping_commands c WHERE c.leg_id=shipping_legs.id AND c.attempted=1)) ORDER BY next_poll_at,observed_at LIMIT 10",Date.now(),Date.now()).toArray() as unknown as shippingFlow.Leg[];}
+  shippingQueue() {this.ensureCommerceStorage();return shippingFlow.shippingQueue(this.sql);}
+  shippingRetry(id:string,actor:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>shippingFlow.retryShippingCommand(this.sql,id,actor)));}
+  shippingCircuitStatus() {this.ensureCommerceStorage();return shippingFlow.shippingCircuitStatus(this.sql);}
+  shippingQuoteResults(outcomes:Parameters<typeof shippingFlow.reportShippingQuotes>[1]) {this.ensureCommerceStorage();this.ctx.storage.transactionSync(()=>shippingFlow.reportShippingQuotes(this.sql,outcomes));}
+  shippingPrepareLeg(input:Parameters<typeof shippingFlow.prepareExternalLeg>[1],account:Parameters<typeof shippingFlow.prepareExternalLeg>[2],actor:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>shippingFlow.prepareExternalLeg(this.sql,input,account,actor)));}
+  shippingPosObservation(id:string,pos:Parameters<typeof shippingFlow.observePosShipping>[2]) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>shippingFlow.observePosShipping(this.sql,id,pos)));}
+  shippingQueueApproved(id:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>shippingFlow.queueApprovedShipping(this.sql,id)));}
+  shippingServiceDue() {this.ensureCommerceStorage();return {requests:this.sql.exec("SELECT DISTINCT order_id FROM commerce_requests WHERE status='approved' AND kind IN ('cancel','address') LIMIT 20").toArray().map(r=>String(r.order_id)),completions:this.sql.exec("SELECT c.id FROM shipping_commands c JOIN commerce_requests r ON r.id=c.request_id WHERE c.state='verified' AND c.result='carrier_and_pos_verified' AND r.status='approved' LIMIT 20").toArray().map(r=>String(r.id))};}
+  shippingServiceComplete(commandId:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>shippingFlow.completeShippingService(this.sql,commandId)));}
+
   commerceReplay(input:CheckoutInput) {this.ensureCommerceStorage();return shippingResult(()=>replayCheckout(this.sql,input));}
   confirmCommerceCheckout(input:CheckoutInput,config:CheckoutConfig) {
     this.ensureCommerceStorage();
     return shippingResult(()=>this.ctx.storage.transactionSync(()=>confirmCheckout(this.sql,input,config)));
   }
   commerceReceipt(id:string) {this.ensureCommerceStorage();return shippingResult(()=>receipt(this.sql,id));}
+  commerceNotificationClaim() {this.ensureCommerceStorage();return this.ctx.storage.transactionSync(()=>serviceNotificationClaim(this.sql));}
+  commerceNotificationFinish(id:string,sent:boolean) {this.ensureCommerceStorage();serviceNotificationFinish(this.sql,id,sent);}
+  commerceRecovery(number:string,email:string) {this.ensureCommerceStorage();return serviceRecovery(this.sql,number,email);}
+  commerceEvidenceStore(id:string,key:string,mime:string,hash:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>storeServiceEvidence(this.sql,id,key,mime,hash)));}
+  commerceEvidenceRead(id:string,evidenceId:string) {this.ensureCommerceStorage();return shippingResult(()=>readServiceEvidence(this.sql,id,evidenceId));}
+  commerceAddressAdjustment(id:string,input:z.infer<typeof adjustmentInput>,actor:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>recordAddressAdjustment(this.sql,id,input,actor)));}
+  commerceServiceReconcile(id:string,version:number,evidence:string,actor:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>reconcileServicePayment(this.sql,id,version,evidence,actor)));}
+  commerceExpireHolds() {this.ensureCommerceStorage();const ids=this.sql.exec("SELECT c.order_id FROM commerce_orders c WHERE c.reservation_state='held' AND c.payment_status IN ('pending','unpaid') AND c.expires_at<? AND c.pancake_order_id IS NULL AND NOT EXISTS(SELECT 1 FROM commerce_outbox b WHERE b.order_id=c.order_id AND b.create_attempted=1) AND NOT EXISTS(SELECT 1 FROM commerce_requests r WHERE r.order_id=c.order_id AND r.status IN ('pending','approved')) ORDER BY c.expires_at LIMIT 20",Date.now()).toArray();return ids.map(r=>shippingResult(()=>this.ctx.storage.transactionSync(()=>expireServiceHold(this.sql,String(r.order_id)))));}
+  commerceServiceDetail(id:string) {this.ensureCommerceStorage();return shippingResult(()=>serviceDetail(this.sql,id));}
+  commerceServiceQueue() {this.ensureCommerceStorage();return serviceQueue(this.sql);}
+  commerceServiceSnapshot(id:string) {this.ensureCommerceStorage();return shippingResult(()=>serviceSnapshot(this.sql,id));}
+  commerceServiceRequest(id:string,input:z.infer<typeof requestInput>,hash:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>{assertActionSession(this.sql,id,hash);return createServiceRequest(this.sql,id,input,'verified-customer');}));}
+  commerceServiceDecision(id:string,input:z.infer<typeof decisionInput>,actor:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>decideServiceRequest(this.sql,id,input,actor)));}
+  commerceRefundCreate(id:string,input:z.infer<typeof refundInput>,actor:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>createRefund(this.sql,id,input,actor)));}
+  commerceRefundResult(id:string,input:z.infer<typeof refundResultInput>,actor:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>recordRefundResult(this.sql,id,input,actor)));}
+  commerceActionStart(id:string,session:string,hash:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>startActionSession(this.sql,id,session,hash)));}
+  commerceActionVerify(id:string,session:string,hash:string,tokenHash:string) {this.ensureCommerceStorage();return this.ctx.storage.transactionSync(()=>verifyActionSession(this.sql,id,session,hash,tokenHash));}
+  commerceActionAssert(id:string,hash:string,kind?:'quote'|'evidence') {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>serviceActionAccess(this.sql,id,hash,kind)));}
+  commerceAddressQuote(id:string,version:number,recipient:CheckoutInput['recipient'],offer:import('./lib/smart-shipping').ShippingOffer,hash:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>{assertActionSession(this.sql,id,hash);return storeAddressQuote(this.sql,id,version,recipient,offer);}));}
   commerceCancel(id:string,evidence:string,actor:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>cancelPendingOrder(this.sql,id,evidence,actor)));}
-  commerceResolveBank(id:string,input:z.infer<typeof bankResolutionInput>,actor:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>resolveBankException(this.sql,id,input,actor)));}
+  commerceResolveBank(id:string,input:z.infer<typeof bankResolutionInput>,actor:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>{assertLegacyResolution(this.sql,id);return resolveBankException(this.sql,id,input,actor);}));}
   commerceOverviewInit() {this.ensureCommerceStorage();}
   async commerceStorageBookmark() {this.ensureInitialized();return {bookmark:await this.ctx.storage.getCurrentBookmark(),created_at:new Date().toISOString()};}
   commercePending() {this.ensureCommerceStorage();return this.sql.exec("SELECT b.order_id FROM commerce_outbox b JOIN commerce_orders c ON c.order_id=b.order_id LEFT JOIN commerce_shipments s ON s.order_id=c.order_id WHERE (b.state NOT IN ('synced','canceled') AND json_extract(c.snapshot_json,'$.automation_version')=2 AND b.lease_until<?) OR (b.state='synced' AND json_extract(c.snapshot_json,'$.automation_version')=2 AND (s.order_id IS NULL OR (s.state NOT IN ('delivered','returned','canceled') AND s.lease_until<? AND s.next_attempt_at<?))) ORDER BY COALESCE(s.next_attempt_at,0),b.created_at LIMIT 10",Date.now(),Date.now(),Date.now()).toArray().map(r=>({order_id:String(r.order_id)}));}
@@ -1441,13 +1541,13 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
     this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>recordEvidence(this.sql,id,kind,input,actor)));
   }
   commerceFulfillment(id:string,input:z.infer<typeof fulfillmentInput>,actor:string) {
-    this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>updateFulfillment(this.sql,id,input,actor)));
+    this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>{if(['ready_to_ship','shipped'].includes(input.state))assertNoOpenChanges(this.sql,id);return updateFulfillment(this.sql,id,input,actor);}));
   }
   commerceShipmentClaim(id:string,token:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>claimShipment(this.sql,id,token)));}
-  commerceShipmentAuthorize(id:string,account:string,evidence:string,actor:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>authorizeShipment(this.sql,id,account,evidence,actor)));}
-  commerceShipmentMark(id:string,token:string,partner:number,account:number) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>markShipmentAttempt(this.sql,id,token,partner,account)));}
+  commerceShipmentAuthorize(id:string,account:string,evidence:string,actor:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>{assertNoOpenChanges(this.sql,id);return authorizeShipment(this.sql,id,account,evidence,actor);}));}
+  commerceShipmentMark(id:string,token:string,partner:number,account:number) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>{assertNoOpenChanges(this.sql,id);return markShipmentAttempt(this.sql,id,token,partner,account);}));}
   commerceShipmentFinish(id:string,token:string,result:ShipmentResult) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>finishShipment(this.sql,id,token,result)));}
-  commerceClaim(id:string,token:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>claimOutbox(this.sql,id,token)));}
+  commerceClaim(id:string,token:string) {this.ensureCommerceStorage();return shippingResult(()=>this.ctx.storage.transactionSync(()=>{assertNoOpenChanges(this.sql,id);return claimOutbox(this.sql,id,token);}));}
   commerceMarkCreate(id:string,token:string) {return shippingResult(()=>this.ctx.storage.transactionSync(()=>markCreateAttempt(this.sql,id,token)));}
   commerceFinish(id:string,token:string,posId:string|null,error:string|null) {return shippingResult(()=>this.ctx.storage.transactionSync(()=>finishOutbox(this.sql,id,token,posId,error)));}
   private ensureShippingStorage() {

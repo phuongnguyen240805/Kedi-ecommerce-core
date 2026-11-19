@@ -5,6 +5,7 @@ import { resolvePosAddress } from './commerce-pos-address';
 import { syncCommerceOrder } from './commerce-pos';
 import { unwrapShipping } from './shipping-store';
 import { ShippingError } from './smart-shipping';
+import {processShippingWork} from './shipping-runner';
 
 type ShipmentDB = Pick<DOStub, 'commerceShipmentClaim' | 'commerceShipmentMark' | 'commerceShipmentFinish'>;
 const partnerSchema = z.object({
@@ -38,15 +39,18 @@ export async function syncCommerceShipment(env: Env, db: ShipmentDB, id: string)
     }
     if (snapshot.shipping?.offer?.provider !== 'ghn' || snapshot.shipping.offer.environment !== 'production' || env.COMMERCE_ENVIRONMENT !== 'production')
       throw new ShippingError('shipment_environment_mismatch', 409, 'Chỉ gửi báo giá GHN production qua Pancake production.');
+    if(snapshot.shipping.offer.execution_owner==='direct')throw new ShippingError('shipment_owner_mismatch',409,'Vận đơn do Fufuni thực thi không được gửi qua Pancake.');
     const accountId = Number(env.PANCAKE_GHN_ACCOUNT_ID);
     if (!Number.isSafeInteger(accountId) || accountId <= 0)
       throw new ShippingError('shipment_account_missing', 503, 'Chưa chọn tài khoản GHN trong Pancake.');
     if (snapshot.dispatch_account_id !== String(accountId))
       throw new ShippingError('shipment_account_changed', 409, 'Tài khoản GHN đã đổi sau khi đặt đơn.');
+    if(snapshot.shipping.offer.pos_account_id&&snapshot.shipping.offer.pos_account_id!==accountId)throw new ShippingError('shipment_account_changed',409,'Tài khoản POS không khớp tài khoản đã chọn trong báo giá.');
     const connections = partnersSchema.parse(await pancakeRequest(env, '/partners')).data;
     const candidates = connections.filter(p => p.name.toUpperCase() === 'GHN' && p.accounts.some(a => a.id === accountId));
     if (candidates.length !== 1) throw new ShippingError('shipment_account_unlinked', 409, 'Tài khoản GHN không còn kết nối với shop.');
     const partnerId = candidates[0].id;
+    if(snapshot.shipping.offer.pos_partner_id&&snapshot.shipping.offer.pos_partner_id!==partnerId)throw new ShippingError('shipment_partner_changed',409,'Mã hãng POS khác với báo giá đã xác nhận.');
     const read = async (existing?: ReturnType<typeof parsePancakeOrder>) => {
       const pos = existing || parsePancakeOrder(await pancakeRequest(env, path));
       observe(pos);
@@ -112,6 +116,8 @@ export async function syncCommerceShipment(env: Env, db: ShipmentDB, id: string)
 
 export async function processCommerceOrder(env: Env, db: DOStub, id: string) {
   await syncCommerceOrder(env, db, id);
-  await syncCommerceShipment(env, db, id);
+  const leg=unwrapShipping(await db.shippingBootstrap(id,env.SHIPPING_AUTOMATION_ENABLED==='true'));
+  if(leg.owner==='pancake')await syncCommerceShipment(env, db, id);
+  else await processShippingWork(env,db);
   return { synced: true };
 }

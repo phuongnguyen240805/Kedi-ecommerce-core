@@ -82,11 +82,15 @@ webhooks.post('/stripe', async (c) => {
   ]);
   if (existing) return c.json({ ok: true });
 
-  if (event.type === 'checkout.session.completed') {
+  if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
     const webhookSession = event.data.object as Stripe.Checkout.Session;
     
+    if (webhookSession.payment_status !== 'paid') {
+      return c.json({ ok: true, awaiting_payment: true });
+    }
     if (webhookSession.metadata?.ucp_checkout_session_id) {
-      await handleUCPStripeWebhook(db, webhookSession.id, webhookSession);
+      await handleUCPStripeWebhook(c.var.db, webhookSession.id, webhookSession);
+      return c.json({ ok: true });
     }
     
     const cartId = webhookSession.metadata?.cart_id;
@@ -518,7 +522,7 @@ webhooks.post('/stripe', async (c) => {
 
   // Log event
   await db.run(
-    `INSERT INTO events (id, stripe_event_id, type, payload) VALUES (?, ?, ?, ?)`,
+    `INSERT OR IGNORE INTO events (id, stripe_event_id, type, payload) VALUES (?, ?, ?, ?)`,
     [uuid(), event.id, event.type, JSON.stringify(event.data.object)]
   );
 

@@ -1,4 +1,5 @@
 import { storeApiBase } from '../lib/stores';
+import { startStripeCheckout } from '../lib/ucp-payment-service';
 /**
  * MIT License
  *
@@ -26,7 +27,7 @@ import { storeApiBase } from '../lib/stores';
 
 import { OpenAPIHono, createRoute } from '@hono/zod-openapi';
 import { z } from '@hono/zod-openapi';
-import Stripe from 'stripe';
+import type Stripe from 'stripe';
 import { getDb, type Database } from '../db';
 import { ApiError, uuid, now, type HonoEnv } from '../types';
 import { resolveVariantPrice, getCurrencyIdFromCode } from '../lib/pricing';
@@ -182,7 +183,8 @@ function parseUCPAgentHeader(header: string | null): { profile?: string } {
   return { profile: match?.[1] };
 }
 
-async function getStripeConfig(db: Database): Promise<{ secretKey: string | null; webhookSecret: string | null }> {
+async function getStripeConfig(db: Database, env: Pick<import('../types').Env, 'STRIPE_SECRET_KEY' | 'STRIPE_WEBHOOK_SECRET'>): Promise<{ secretKey: string | null; webhookSecret: string | null }> {
+  if (env.STRIPE_SECRET_KEY) return { secretKey: env.STRIPE_SECRET_KEY, webhookSecret: env.STRIPE_WEBHOOK_SECRET || null };
   const [config] = await db.query<{ value: string }>(
     `SELECT value FROM config WHERE key = 'stripe'`,
     []
@@ -265,7 +267,7 @@ const routeGetUCPProfile = createRoute({
 ucp.openapi(routeGetUCPProfile, async (c) => {
   const baseUrl = storeApiBase(c.req.url, c.env);
   const db = getDb(c.var.db);
-  const stripeConfig = await getStripeConfig(db);
+  const stripeConfig = await getStripeConfig(db, c.env);
   
   // Build payment handlers based on Stripe config
   const paymentHandlers: UCPPaymentHandler[] = [];
@@ -512,7 +514,7 @@ ucp.openapi(routePostCheckoutSession, async (c) => {
   );
   
   // Build payment handlers
-  const stripeConfig = await getStripeConfig(db);
+  const stripeConfig = await getStripeConfig(db, c.env);
   const paymentHandlers: UCPPaymentHandler[] = [];
   
   if (stripeConfig.secretKey) {
@@ -577,12 +579,12 @@ ucp.openapi(routeGetCheckoutSession, async (c) => {
   }
   
   // Check expiration
-  if (session.expires_at && new Date(session.expires_at) < new Date()) {
-    await db.run(`UPDATE ucp_checkout_sessions SET status = 'canceled' WHERE id = ?`, [sessionId]);
+  if (session.expires_at && new Date(session.expires_at) < new Date() && !['completed','canceled','complete_in_progress'].includes(session.status)) {
+    await db.run(`UPDATE ucp_checkout_sessions SET status = 'canceled' WHERE id = ? AND status NOT IN ('completed','complete_in_progress')`, [sessionId]);
     session.status = 'canceled';
   }
   
-  const stripeConfig = await getStripeConfig(db);
+  const stripeConfig = await getStripeConfig(db, c.env);
   const paymentHandlers: UCPPaymentHandler[] = [];
   
   if (stripeConfig.secretKey) {
@@ -658,7 +660,7 @@ ucp.openapi(routePutCheckoutSession, async (c) => {
     throw ApiError.notFound('Checkout session not found');
   }
   
-  if (session.status === 'completed' || session.status === 'canceled') {
+  if (['completed', 'canceled', 'complete_in_progress'].includes(session.status)) {
     throw ApiError.invalidRequest(`Cannot update ${session.status} checkout session`);
   }
   
@@ -748,10 +750,10 @@ ucp.openapi(routePutCheckoutSession, async (c) => {
     { type: 'grand_total', amount: updatedGrandTotal, currency: activeCurrency },
   ];
   
-  await db.run(
+  const updatedCheckout = await db.run(
     `UPDATE ucp_checkout_sessions 
      SET status = ?, currency = ?, line_items = ?, buyer = ?, totals = ?, messages = ?, updated_at = ?
-     WHERE id = ?`,
+     WHERE id = ? AND status NOT IN ('completed','canceled','complete_in_progress')`,
     [
       status,
       activeCurrency,
@@ -763,8 +765,9 @@ ucp.openapi(routePutCheckoutSession, async (c) => {
       sessionId,
     ]
   );
+  if (!updatedCheckout.changes) throw ApiError.invalidRequest('Checkout changed while updating');
   
-  const stripeConfig = await getStripeConfig(db);
+  const stripeConfig = await getStripeConfig(db, c.env);
   const paymentHandlers: UCPPaymentHandler[] = [];
   
   if (stripeConfig.secretKey) {
@@ -837,7 +840,7 @@ ucp.openapi(routePostComplete, async (c) => {
   if (session.status === 'canceled') {
     throw ApiError.invalidRequest('Checkout was canceled');
   }
-  if (session.status !== 'ready_for_complete') {
+  if (!['ready_for_complete', 'complete_in_progress'].includes(session.status)) {
     throw ApiError.invalidRequest(`Cannot complete checkout in ${session.status} state`);
   }
   
@@ -845,52 +848,14 @@ ucp.openapi(routePostComplete, async (c) => {
   const buyer = JSON.parse(session.buyer || '{}');
   const totals = JSON.parse(session.totals || '[]');
 
-  const stripeConfig = await getStripeConfig(db);
+  const stripeConfig = await getStripeConfig(db, c.env);
 
   // For UCP, we use Stripe Checkout redirect flow
   // The payment_data should indicate the handler being used
   if (stripeConfig.secretKey && payment_data?.handler_id === 'stripe_checkout') {
-    // Mark as in progress only after confirming the handler is valid
-    await db.run(
-      `UPDATE ucp_checkout_sessions SET status = 'complete_in_progress', updated_at = ? WHERE id = ?`,
-      [now(), sessionId]
-    );
-    const stripe = new Stripe(stripeConfig.secretKey);
-    
-    // Create Stripe Checkout Session
-    const stripeLineItems = lineItems.map((item: UCPLineItem) => ({
-      price_data: {
-        currency: session.currency.toLowerCase(),
-        product_data: {
-          name: item.item.title || item.item.id,
-          description: item.item.description,
-          images: item.item.image_url ? [item.item.image_url] : undefined,
-        },
-        unit_amount: item.unit_price.amount,
-      },
-      quantity: item.quantity,
-    }));
-    
-    const successUrl = payment_data.success_url || `${baseUrl}/ucp/v1/checkout-sessions/${sessionId}/success`;
-    const cancelUrl = payment_data.cancel_url || `${baseUrl}/ucp/v1/checkout-sessions/${sessionId}/cancel`;
-    
-    const stripeSession = await stripe.checkout.sessions.create({
-      mode: 'payment',
-      line_items: stripeLineItems,
-      success_url: successUrl,
-      cancel_url: cancelUrl,
-      customer_email: buyer.email,
-      metadata: {
-        ucp_checkout_session_id: sessionId,
-      },
-    });
-    
-    // Store Stripe session ID
-    await db.run(
-      `UPDATE ucp_checkout_sessions SET stripe_session_id = ?, updated_at = ? WHERE id = ?`,
-      [stripeSession.id, now(), sessionId]
-    );
-    
+    const stripeSession = await startStripeCheckout(c.var.db, c.env, sessionId, baseUrl,
+      payment_data.success_url, payment_data.cancel_url);
+
     // Return requires_escalation with continue_url pointing to Stripe
     return c.json({
       ucp: ucpEnvelope(activeCapabilities()),
@@ -924,9 +889,10 @@ ucp.openapi(routePostComplete, async (c) => {
   }
   
   // No valid payment handler — graceful escalation to web checkout
+  if (session.status === 'complete_in_progress') throw ApiError.invalidRequest('Payment is already in progress');
   const continueUrl = `${baseUrl}/checkout/${sessionId}`;
   await db.run(
-    `UPDATE ucp_checkout_sessions SET status = 'requires_escalation', updated_at = ? WHERE id = ?`,
+    `UPDATE ucp_checkout_sessions SET status = 'requires_escalation', updated_at = ? WHERE id = ? AND status='ready_for_complete'`,
     [now(), sessionId]
   );
   return c.json({
@@ -981,12 +947,12 @@ ucp.openapi(routeDeleteCheckoutSession, async (c) => {
     throw ApiError.notFound('Checkout session not found');
   }
   
-  if (session.status === 'completed') {
-    throw ApiError.invalidRequest('Cannot cancel completed checkout');
+  if (['completed', 'complete_in_progress'].includes(session.status)) {
+    throw ApiError.invalidRequest('Cannot cancel a checkout with a payment in progress');
   }
   
   await db.run(
-    `UPDATE ucp_checkout_sessions SET status = 'canceled', updated_at = ? WHERE id = ?`,
+    `UPDATE ucp_checkout_sessions SET status = 'canceled', updated_at = ? WHERE id = ? AND status NOT IN ('completed','complete_in_progress')`,
     [now(), sessionId]
   );
   
@@ -1037,7 +1003,7 @@ ucp.openapi(routePatchCheckoutSession, async (c) => {
     `SELECT * FROM ucp_checkout_sessions WHERE id = ?`, [sessionId]
   );
   if (!session) throw ApiError.notFound('Checkout session not found');
-  if (['completed', 'canceled'].includes(session.status)) {
+  if (['completed', 'canceled', 'complete_in_progress'].includes(session.status)) {
     throw ApiError.invalidRequest(`Cannot update ${session.status} session`);
   }
 
@@ -1086,7 +1052,7 @@ ucp.openapi(routePatchCheckoutSession, async (c) => {
   values.push(now(), sessionId);
 
   const setClauses = Object.keys(updates).map(k => `${k} = ?`).join(', ');
-  await db.run(`UPDATE ucp_checkout_sessions SET ${setClauses} WHERE id = ?`, values);
+  await db.run(`UPDATE ucp_checkout_sessions SET ${setClauses} WHERE id = ? AND status NOT IN ('completed','canceled','complete_in_progress')`, values);
 
   return c.redirect(`/ucp/v1/checkout-sessions/${sessionId}`, 303);
 });
@@ -1287,7 +1253,7 @@ ucp.openapi(routePostEstimateShipping, async (c) => {
     [sessionId]
   );
   if (!session) throw ApiError.notFound('Checkout session not found');
-  if (['completed', 'canceled'].includes(session.status)) {
+  if (['completed', 'canceled', 'complete_in_progress'].includes(session.status)) {
     throw ApiError.invalidRequest(`Cannot estimate shipping for ${session.status} session`);
   }
 
@@ -1329,76 +1295,21 @@ ucp.openapi(routePostEstimateShipping, async (c) => {
  *
  * Called by the main Stripe webhook route; not exposed directly as an HTTP endpoint.
  *
- * @param db              - Database instance.
+ * @param stub            - Store-scoped Durable Object stub.
  * @param stripeSessionId - The Stripe `checkout.session` ID.
  * @param stripeSession   - The full Stripe `Checkout.Session` object from the event.
  */
 export async function handleUCPStripeWebhook(
-  db: Database,
+  stub: import('../types').DOStub,
   stripeSessionId: string,
-  stripeSession: Stripe.Checkout.Session
+  stripeSession: Stripe.Checkout.Session,
 ): Promise<void> {
-  const ucpSessionId = stripeSession.metadata?.ucp_checkout_session_id;
-  if (!ucpSessionId) return;
-  
-  const [session] = await db.query<any>(
-    `SELECT * FROM ucp_checkout_sessions WHERE id = ? AND stripe_session_id = ?`,
-    [ucpSessionId, stripeSessionId]
-  );
-  
-  if (!session || session.status === 'completed') return;
-  
-  // Create order
-  const orderId = uuid();
-  const lineItems = JSON.parse(session.line_items || '[]');
-  const buyer = JSON.parse(session.buyer || '{}');
-  const totals = JSON.parse(session.totals || '[]');
-  const subtotalAmount = totals.find((t: any) => t.type === 'subtotal')?.amount || 0;
-  const taxAmount      = totals.find((t: any) => t.type === 'tax')?.amount      || 0;
-  const shippingAmount = totals.find((t: any) => t.type === 'shipping')?.amount || 0;
-  const grandTotal     = totals.find((t: any) => t.type === 'grand_total')?.amount || 0;
-
-  // Get next order number
-  const [orderCount] = await db.query<{ cnt: number }>(`SELECT COUNT(*) as cnt FROM orders`, []);
-  const orderNumber = `ORD-${String((orderCount?.cnt || 0) + 1).padStart(5, '0')}`;
-
-  // Insert order
-  await db.run(
-    `INSERT INTO orders (id, number, status, customer_email, subtotal_cents, tax_cents, shipping_cents, total_cents, currency, stripe_session_id, items, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      orderId,
-      orderNumber,
-      'paid',
-      buyer.email || stripeSession.customer_email,
-      subtotalAmount,
-      taxAmount,
-      shippingAmount,
-      grandTotal,
-      session.currency,
-      stripeSessionId,
-      JSON.stringify(lineItems.map((li: UCPLineItem) => ({
-        sku: li.item.id,
-        title: li.item.title,
-        qty: li.quantity,
-        unit_price_cents: li.unit_price.amount,
-      }))),
-      now(),
-      now(),
-    ]
-  );
-  
-  // Update UCP session
-  await db.run(
-    `UPDATE ucp_checkout_sessions SET status = 'completed', order_id = ?, order_number = ?, updated_at = ? WHERE id = ?`,
-    [orderId, orderNumber, now(), ucpSessionId]
-  );
-  
-  // Deduct inventory
-  for (const item of lineItems) {
-    await db.run(
-      `UPDATE inventory SET on_hand = on_hand - ?, reserved = reserved - ? WHERE sku = ?`,
-      [item.quantity, item.quantity, item.item.id]
-    );
-  }
+  const sessionId = stripeSession.metadata?.ucp_checkout_session_id;
+  if (!sessionId || stripeSession.payment_status !== 'paid') return;
+  await stub.ucpPaymentSettle({ sessionId, stripeId: stripeSessionId,
+    paymentStatus: stripeSession.payment_status,
+    amount: stripeSession.amount_total ?? -1, currency: stripeSession.currency || '',
+    paymentIntent: typeof stripeSession.payment_intent === 'string'
+      ? stripeSession.payment_intent : stripeSession.payment_intent?.id || null,
+  });
 }

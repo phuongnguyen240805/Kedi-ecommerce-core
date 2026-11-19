@@ -26,6 +26,12 @@
 import { OpenAPIHono, createRoute } from '@hono/zod-openapi';
 import { z } from '@hono/zod-openapi';
 import Stripe from 'stripe';
+// Derive SDK input types from the installed resource signature (Stripe 22).
+type CheckoutCreate = NonNullable<Parameters<Stripe['checkout']['sessions']['create']>[0]>;
+type CheckoutLineItem = NonNullable<CheckoutCreate['line_items']>[number];
+type CheckoutProductData = NonNullable<NonNullable<CheckoutLineItem['price_data']>['product_data']>;
+type CheckoutShippingOption = NonNullable<CheckoutCreate['shipping_options']>[number];
+type CheckoutCountry = NonNullable<CheckoutCreate['shipping_address_collection']>['allowed_countries'][number];
 import { getDb } from '../db';
 import { authMiddleware } from '../middleware/auth';
 import { ApiError, uuid, now, isValidEmail, type HonoEnv } from '../types';
@@ -595,8 +601,8 @@ adminApp.openapi(checkoutCart, async (c) => {
   const { taxes: taxesDetail, itemRates, shipping_ht_cents } = await calculateCartTaxes(db, cartId, cart.shipping_country);
   const taxInclusive = cart.region_id && (await db.query<any>(`SELECT tax_inclusive FROM regions WHERE id = ?`, [cart.region_id]))[0]?.tax_inclusive === 1; // Fallback for general behavior
 
-  const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = enrichedItems.map((item) => {
-    const productData: Stripe.Checkout.SessionCreateParams.LineItem.PriceData.ProductData = {
+  const lineItems: CheckoutLineItem[] = enrichedItems.map((item) => {
+    const productData: CheckoutProductData = {
       name: item.display_name ?? item.title,
     };
     if (item.tax_code) {
@@ -701,7 +707,7 @@ adminApp.openapi(checkoutCart, async (c) => {
     currencyId ?? undefined,
   );
 
-  const dynamicShippingOptions: Stripe.Checkout.SessionCreateParams.ShippingOption[] =
+  const dynamicShippingOptions: CheckoutShippingOption[] =
     compatibleRates
       .filter((rate) => !cart.shipping_rate_id || rate.id === cart.shipping_rate_id)
       .map((rate) => {
@@ -725,7 +731,7 @@ adminApp.openapi(checkoutCart, async (c) => {
         };
       });
 
-  const defaultShippingOptions: Stripe.Checkout.SessionCreateParams.ShippingOption[] = [
+  const defaultShippingOptions: CheckoutShippingOption[] = [
     {
       shipping_rate_data: {
         type: 'fixed_amount',
@@ -792,7 +798,7 @@ adminApp.openapi(checkoutCart, async (c) => {
       ...(collect_shipping && {
         shipping_address_collection: {
           allowed_countries:
-            shipping_countries as Stripe.Checkout.SessionCreateParams.ShippingAddressCollection.AllowedCountry[],
+            shipping_countries as CheckoutCountry[],
         },
       }),
       // Pre-fill shipping address and customer name collected during checkout step 2

@@ -35,6 +35,7 @@ import ProductsPage from "@/pages/admin/products";
 import CustomersPage from "@/pages/admin/customers";
 import InventoryPage from "@/pages/admin/inventory";
 import OrdersPage from "@/pages/admin/orders";
+import CommerceServicePage from "@/pages/admin/commerce-service";
 import WebhooksPage from "@/pages/admin/webhooks";
 import EmailTemplatesPage from "@/pages/admin/email-templates";
 import RegionsPage from "@/pages/admin/regions";
@@ -133,6 +134,7 @@ function App() {
           element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><OrdersPage /></AuthenticationGuardWithPermission>}
           path="/admin/orders"
         />
+        <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><CommerceServicePage /></AuthenticationGuardWithPermission>} path="/admin/commerce-service" />
         <Route
           element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><WebhooksPage /></AuthenticationGuardWithPermission>}
           path="/admin/webhooks"

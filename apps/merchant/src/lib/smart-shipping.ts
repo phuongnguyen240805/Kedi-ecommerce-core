@@ -10,6 +10,7 @@ export const quoteRequestSchema=z.object({cart_id:z.string().uuid(),destination:
   payment_method:z.enum(['prepaid','cod']).default('prepaid'),deliver_by:z.string().datetime({offset:true}).optional()}).strict();
 export type QuoteRequest=z.infer<typeof quoteRequestSchema>;
 export const policySchema=z.object({version:z.string().min(1).max(50),max_delivery_hours:positive.max(168),
+  optimization:z.enum(['cheapest','fastest','balanced']).default('cheapest'),
   delivery_deadline_mode:z.enum(['strict','preferred']).default('strict'),
   subsidy_vnd:amount.default(0),free_shipping_from_vnd:positive.optional(),
   allowed_district_ids:z.array(positive).max(1000).optional(),
@@ -60,12 +61,16 @@ export function validateShippingCart(cart:ShippingCart,policy:ShippingPolicy,now
 }
 export type Parcel=ReturnType<typeof validateShippingCart>;
 export type ShippingOffer={id:string;provider:string;service_type_id:number;service_name:string;currency:'VND';
+  account_id?:string;execution_owner?:'pancake'|'direct';service_id?:string;selection_reason?:string;
+  account_binding?:{shop_id:number;warehouse_id:string;from_district_id:number;from_ward_code:string};
+  pos_account_id?:number;pos_partner_id?:number;
   meets_delivery_deadline?:boolean;
   carrier_fee_vnd:number;subsidy_vnd:number;customer_fee_vnd:number;cod_value_vnd:number;estimated_delivery_at:string;
   fee_breakdown:Record<string,number>;source:'carrier_api';environment:'production'|'staging'};
-export type ProviderContext={config:ShippingConfig;request:QuoteRequest;parcel:Parcel;now:number;signal:AbortSignal};
+export type QuoteEngineConfig={policy:ShippingPolicy;environment:'production'|'staging';registry_identity?:unknown};
+export type ProviderContext={config:QuoteEngineConfig;request:QuoteRequest;parcel:Parcel;now:number;signal:AbortSignal};
 export type ProviderResult={offers:ShippingOffer[];warnings:{provider:string;code:string}[]};
-export type ShippingProvider={code:string;quote:(context:ProviderContext)=>Promise<ProviderResult>};
+export type ShippingProvider={code:string;timeout_ms?:number;quote:(context:ProviderContext)=>Promise<ProviderResult>};
 export function applySubsidy(fee:number,goods:number,policy:ShippingPolicy){
   if(!Number.isSafeInteger(fee)||fee<0||fee>2_000_000_000)throw new ShippingError('carrier_schema',502,'Phí hãng trả về không hợp lệ.');
   const subsidy=policy.free_shipping_from_vnd!==undefined&&goods>=policy.free_shipping_from_vnd?fee:Math.min(fee,policy.subsidy_vnd);
@@ -79,10 +84,10 @@ export async function hashShipping(value:unknown){
   const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(value)));
   return Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('');
 }
-export function policyIdentity(config:ShippingConfig){const {token,...publicConfig}=config;return publicConfig;}
+export function policyIdentity(config:QuoteEngineConfig){return Object.fromEntries(Object.entries(config).filter(([key])=>key!=='token'));}
 export type StoredShippingQuote={id:string;cart_id:string;cart_snapshot:string;policy_key:string;fingerprint:string;
   request:QuoteRequest;offers:ShippingOffer[];recommended_id:string;created_at:number;expires_at:number};
-export async function calculateShipping(cart:ShippingCart,request:QuoteRequest,config:ShippingConfig,providers:ShippingProvider[],now=Date.now()){
+export async function calculateShipping(cart:ShippingCart,request:QuoteRequest,config:QuoteEngineConfig,providers:ShippingProvider[],now=Date.now()){
   const parcel=validateShippingCart(cart,config.policy,now);
   if(config.policy.allowed_district_ids&&!config.policy.allowed_district_ids.includes(request.destination.district_id))
     throw new ShippingError('destination_unavailable',422,'Địa chỉ ngoài khu vực phục vụ đã cấu hình.');
@@ -90,12 +95,24 @@ export async function calculateShipping(cart:ShippingCart,request:QuoteRequest,c
   const requestedDeadline=request.deliver_by?Date.parse(request.deliver_by):policyDeadline;
   const deadline=config.policy.delivery_deadline_mode==='preferred'?requestedDeadline:Math.min(policyDeadline,requestedDeadline);
   if(!Number.isFinite(deadline)||deadline<=now)throw new ShippingError('deadline_invalid',400,'Thời hạn giao phải nằm trong tương lai.');
-  const signal=AbortSignal.timeout(12_000);
-  const results=await Promise.allSettled(providers.map(p=>p.quote({config,request,parcel,now,signal})));
+  const results=await Promise.allSettled(providers.map(async p=>{
+    const controller=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
+    try{return await Promise.race([p.quote({config,request,parcel,now,signal:controller.signal}),new Promise<ProviderResult>((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new ShippingError('carrier_timeout',502,'Hãng vận chuyển chưa phản hồi.'));},Math.min(12000,Math.max(100,p.timeout_ms??12000)));})]);}
+    finally{if(timer)clearTimeout(timer);controller.abort();}
+  }));
   const offers:ShippingOffer[]=[];const warnings:ProviderResult['warnings']=[];
   results.forEach((r,i)=>{if(r.status==='fulfilled'){offers.push(...r.value.offers);warnings.push(...r.value.warnings);}else warnings.push({provider:providers[i].code,code:r.reason instanceof ShippingError?r.reason.code:'carrier_unavailable'});});
-  const annotated=offers.map(o=>({...o,meets_delivery_deadline:Date.parse(o.estimated_delivery_at)<=deadline}));
+  const valid=offers.filter(o=>o.currency==='VND'&&o.environment===config.environment&&[o.carrier_fee_vnd,o.subsidy_vnd,o.customer_fee_vnd,o.cod_value_vnd].every(n=>Number.isSafeInteger(n)&&n>=0&&n<=2_000_000_000)&&o.customer_fee_vnd+o.subsidy_vnd===o.carrier_fee_vnd&&o.cod_value_vnd===(request.payment_method==='cod'?parcel.goods_value_vnd+o.customer_fee_vnd:0));
+  const annotated=valid.map(o=>({...o,meets_delivery_deadline:Date.parse(o.estimated_delivery_at)<=deadline}));
   const eligible=selectCheapest(annotated,config.policy.delivery_deadline_mode==='preferred'?Infinity:deadline).filter(o=>Date.parse(o.estimated_delivery_at)>=now);
+  const fastest=Math.min(...eligible.map(o=>Date.parse(o.estimated_delivery_at)-now));
+  const cheapest=Math.min(...eligible.map(o=>o.customer_fee_vnd));
+  if(config.policy.optimization==='fastest')eligible.sort((a,b)=>Date.parse(a.estimated_delivery_at)-Date.parse(b.estimated_delivery_at)||a.customer_fee_vnd-b.customer_fee_vnd||a.id.localeCompare(b.id));
+  if(config.policy.optimization==='balanced'){
+    const score=(o:ShippingOffer)=>0.5*o.customer_fee_vnd/Math.max(1,cheapest)+0.5*(Date.parse(o.estimated_delivery_at)-now)/Math.max(1,fastest);
+    eligible.sort((a,b)=>score(a)-score(b)||a.id.localeCompare(b.id));
+  }
+  for(const o of eligible)o.selection_reason=config.policy.optimization;
   const excluded_offers=config.policy.delivery_deadline_mode==='preferred'?[]:annotated.filter(o=>Number.isFinite(Date.parse(o.estimated_delivery_at))&&Date.parse(o.estimated_delivery_at)>deadline);
   const expires_at=now+300_000;
   if(!eligible.length)return {quote:null,parcel,excluded_offers,expires_at,warnings:[...warnings,{provider:'engine',code:offers.length?'delivery_deadline_unavailable':'no_carrier_quote'}]};

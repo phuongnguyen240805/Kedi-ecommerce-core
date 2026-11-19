@@ -309,6 +309,7 @@ export default function OrdersPage() {
   return (
     <DefaultLayout>
       <div className="px-4 py-6">
+        <p className="mb-5 rounded-xl border border-default-200 p-4 text-sm">Đơn COD/QR thuộc luồng commerce cần xử lý hủy, đổi địa chỉ, tiền và tồn kho tại <a className="font-semibold underline" href="/admin/commerce-service">Vận hành đơn hàng</a>. API cũ không cho sửa trực tiếp trạng thái các đơn này.</p>
         {/* Header */}
         <div className="flex items-center justify-between mb-4 h-9">
           <h1

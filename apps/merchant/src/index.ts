@@ -25,9 +25,13 @@
 
 import { OpenAPIHono } from '@hono/zod-openapi';
 import {commerce} from './routes/commerce';
+import {commerceService} from './routes/commerce-service';
+import {deliverServiceNotifications} from './lib/commerce-notifications';
 import {processCommerceOrder as syncCommerceOrder} from './lib/commerce-shipment';
 import {ShippingError} from './lib/smart-shipping';
 import {smartShipping} from './routes/smart-shipping';
+import {shippingOperations,carrierEvents} from './routes/shipping-operations';
+import {processShippingWork} from './lib/shipping-runner';
 import { cors } from 'hono/cors';
 import { swaggerUI } from '@hono/swagger-ui';
 import { adminSetup } from './routes/setup';
@@ -42,6 +46,12 @@ import { publicImages } from './routes/images';
 import { adminDiscounts } from './routes/discounts';
 import { oauth } from './routes/oauth';
 import { ucp } from './routes/ucp';
+import { pod } from './routes/pod';
+import { processPodFulfillment } from './lib/pod-runner';
+import {marketing} from './routes/marketing';
+import {deliverMarketing} from './lib/marketing-runner';
+import {feeds} from './routes/feeds';
+import {shopping} from './routes/shopping';
 import { adminAuth0 } from './routes/auth0';
 import { adminMe } from './routes/me';
 import { adminUserPreferencesRouter } from './routes/user-preferences';
@@ -177,7 +187,14 @@ app.route('/v1/products', adminCatalog);
 app.route('/v1/inventory', adminInventory);
 app.route('/v1/carts', adminCheckout);
 app.route('/v1/shipping',smartShipping);
+app.route('/v1/shipping-operations',shippingOperations);
+app.route('/v1/carrier-events',carrierEvents);
 app.route('/v1/commerce',commerce);
+app.route('/v1/commerce-service',commerceService);
+app.route('/v1/pod',pod);
+app.route('/v1/marketing',marketing);
+app.route('/v1/feeds',feeds);
+app.route('/v1/shopping',shopping);
 app.route('/v1/orders', customerOrderDownloads);
 app.route('/v1/orders', adminOrders);
 app.route('/v1/categories', adminCategories);
@@ -234,12 +251,22 @@ export default {
       try {
         const selected = storeEnvironment(env, store);
         const stub = selected.MERCHANT.get(selected.MERCHANT.idFromName(merchantObjectName(selected)));
+        if(selected.MARKETING_ENABLED==='true'){await stub.marketingPlan();await deliverMarketing(selected,stub);}
+        if(selected.POD_ENABLED==='true') {
+          await stub.podInit();
+          const jobs=await stub.podDue();
+          const base=selected.STORE_PUBLIC_API_URL;
+          if(base)for(const job of jobs)await processPodFulfillment(selected,stub,job.id,base);
+        }
         if(selected.PANCAKE_ORDER_SYNC_ENABLED==='true'){
           await stub.commerceOverviewInit();
           const jobs=await stub.commercePending();
           for(const job of jobs){try{await syncCommerceOrder(selected,stub,job.order_id);}catch{console.warn(JSON.stringify({event:'commerce.pos.needs_attention',store_id:store.id,order_id:job.order_id}));}}
         }
         const cleaned = await stub.cleanupExpiredCarts();
+        await processShippingWork(selected,stub);
+        if(selected.COMMERCE_SERVICE_ENABLED==='true'&&selected.COMMERCE_EXPIRE_UNPAID_ENABLED==='true')await stub.commerceExpireHolds();
+        await deliverServiceNotifications(selected,stub);
         console.log(JSON.stringify({ event: 'store.carts.cleaned', store_id: store.id, count: cleaned }));
         if (selected.PANCAKE_SYNC_ENABLED === 'true' && (_event.cron !== '*/5 * * * *' || new Date(_event.scheduledTime).getUTCMinutes() === 0)) {
           const report = await syncPancake(selected,{trigger:'cron'});

@@ -20,6 +20,22 @@ jobs:
       - run: npm ci
       - run: npm run typecheck --workspaces --if-present
 
+  commerce-tests:
+    name: Commerce, store isolation and operations UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run test:commerce --workspace merchant
+      - run: npm run test:shipping --workspace merchant
+      - run: npm run test:shipping:workflow --workspace merchant
+      - run: npm run test:stores --workspace merchant
+      - run: npm run test:commerce:ui --workspace client
+
   lint:
     name: ESLint
     runs-on: ubuntu-latest

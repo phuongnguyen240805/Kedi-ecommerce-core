@@ -42,6 +42,9 @@ export type SendMailOptions = {
   from?: string;
   cc?: string | string[];
   bcc?: string | string[];
+  unsubscribeUrl?: string;
+  marketingJobId?: string;
+  storeId?: string;
 };
 
 /**
@@ -91,11 +94,16 @@ export async function sendMailgunEmail(env: Env, options: SendMailOptions): Prom
     form.append("cc", Array.isArray(options.cc) ? options.cc.join(",") : options.cc);
   if (options.bcc)
     form.append("bcc", Array.isArray(options.bcc) ? options.bcc.join(",") : options.bcc);
+  if(options.unsubscribeUrl){form.append('h:List-Unsubscribe',`<${options.unsubscribeUrl}>`);form.append('h:List-Unsubscribe-Post','List-Unsubscribe=One-Click');}
+  if(options.marketingJobId)form.append('v:marketing_job_id',options.marketingJobId);
+  if(options.storeId)form.append('v:store_id',options.storeId);
 
   const auth = `Basic ${btoa(`api:${apiKey}`)}`;
 
   const response = await fetch(url, {
     method: "POST",
+    redirect: 'manual',
+    signal: AbortSignal.timeout(10000),
     headers: {
       Authorization: auth,
       "Content-Type": "application/x-www-form-urlencoded",

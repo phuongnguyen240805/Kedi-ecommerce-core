@@ -48,7 +48,7 @@
 
 import { OpenAPIHono, createRoute } from '@hono/zod-openapi';
 import { z } from '@hono/zod-openapi';
-import { getDb } from '../db';
+import { getDb, type Database } from '../db';
 import { customerAuthMiddleware } from '../middleware/customer-auth';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { ApiError, uuid, now, type HonoEnv, type DOStub } from '../types';
@@ -454,12 +454,12 @@ adminAiTokensRouter.openapi(adminListBalances, async (c) => {
  * @param ctx        - Worker execution context (required for webhook dispatch)
  */
 export async function creditAiTokens(
-  db: any,
+  db: ReturnType<typeof getDb>,
   customerId: string,
   orderId: string,
   units: number,
   stub?: DOStub,
-  ctx?: ExecutionContext
+  ctx?: Pick<ExecutionContext,'waitUntil'>
 ): Promise<void> {
   const [customer] = await db.query<any>(
     `SELECT metadata FROM customers WHERE id = ?`,

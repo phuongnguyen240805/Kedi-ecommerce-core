@@ -93,7 +93,7 @@ export function generateWebhookSecret(): string {
  */
 export async function dispatchWebhooks(
   stub: DOStub,
-  ctx: ExecutionContext,
+  ctx: Pick<ExecutionContext, 'waitUntil'>,
   eventType: WebhookEventType,
   data: Record<string, unknown>
 ): Promise<void> {
@@ -246,7 +246,7 @@ export async function retryDelivery(
  */
 export async function checkLowInventory(
   stub: DOStub,
-  ctx: ExecutionContext,
+  ctx: Pick<ExecutionContext, 'waitUntil'>,
   sku: string,
   available: number
 ): Promise<void> {
@@ -267,7 +267,7 @@ export async function checkLowInventory(
  * @param ctx  - The Worker `ExecutionContext`.
  * @returns The number of deliveries scheduled for retry.
  */
-export async function retryFailedDeliveries(stub: DOStub, ctx: ExecutionContext): Promise<number> {
+export async function retryFailedDeliveries(stub: DOStub, ctx: Pick<ExecutionContext, 'waitUntil'>): Promise<number> {
   const db = getDb(stub);
 
   const failed = await db.query<{

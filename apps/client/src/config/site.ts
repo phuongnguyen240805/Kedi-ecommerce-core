@@ -81,6 +81,7 @@ export const siteConfig = () => ({
       href: "/admin/orders",
       permissions: ["admin:store"], // Only visible to users with "admin:store" permission
     },
+    { label: "Vận hành đơn hàng", href: "/admin/commerce-service", permissions: ["admin:store"] },
     {
       label: i18next.t("reviews-title"),
       href: "/admin/reviews",

@@ -114,6 +114,12 @@ describe('store routing and isolation', () => {
     assert.notEqual(print.ORDER_TOKEN_SECRET, 'print-signing-secret');
     assert.equal(env.PANCAKE_API_KEY, 'hali-secret');
   });
+  it('does not leak carrier registries, webhook secrets or automation flags between stores',()=>{
+    const env={...environment(),CARRIER_REGISTRY_JSON:'[{"id":"hali"}]',CARRIER_SECRETS_JSON:'{"hali":{"token":"secret"}}',PANCAKE_ORDER_WEBHOOK_SECRET:'private-webhook-secret',SHIPPING_AUTOMATION_ENABLED:'true',PANCAKE_TRACKING_MIRROR_VERIFIED:'true'} as Env;
+    const other=storeEnvironment(env,storeRegistry(env).stores[2]);
+    for(const name of ['CARRIER_REGISTRY_JSON','CARRIER_SECRETS_JSON','PANCAKE_ORDER_WEBHOOK_SECRET','SHIPPING_AUTOMATION_ENABLED','PANCAKE_TRACKING_MIRROR_VERIFIED'] as const)assert.equal(other[name],undefined);
+    assert.equal(storeEnvironment(env,storeRegistry(env).stores[0]).CARRIER_SECRETS_JSON,env.CARRIER_SECRETS_JSON);
+  });
   it('rejects unknown stores, conflicting headers and disallowed origins without fallback', () => {
     const env = environment();
     assert.throws(

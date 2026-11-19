@@ -1,9 +1,11 @@
 /** Avoid issuing DDL for existing objects on read-only requests. Free-tier
  * exhausted write quotas can reject DDL even when IF NOT EXISTS is a no-op. */
 export function ensureSchemaObjects(sql:{exec:(query:string)=>{toArray:()=>Record<string,unknown>[]}},schema:string) {
-  const existing=new Set(sql.exec("SELECT name FROM sqlite_master WHERE type IN ('table','index')").toArray().map(row=>String(row.name)));
-  for(const statement of schema.split(';').map(s=>s.trim()).filter(Boolean)) {
-    const object=statement.match(/\bCREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\s+IF\s+NOT\s+EXISTS\s+([A-Za-z_]\w*)/i);
+  const existing=new Set(sql.exec("SELECT name FROM sqlite_master WHERE type IN ('table','index','trigger')").toArray().map(row=>String(row.name)));
+  const triggers:string[]=[];
+  const withoutTriggers=schema.replace(/CREATE\s+TRIGGER\b[\s\S]*?\bEND\s*;/gi,statement=>{triggers.push(statement);return '';});
+  for(const statement of [...withoutTriggers.split(';').map(s=>s.trim()).filter(Boolean),...triggers]) {
+    const object=statement.match(/\bCREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX|TRIGGER)\s+IF\s+NOT\s+EXISTS\s+([A-Za-z_]\w*)/i);
     if(object&&existing.has(object[1]))continue;
     sql.exec(statement);
     if(object)existing.add(object[1]);

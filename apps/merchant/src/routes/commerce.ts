@@ -1,5 +1,7 @@
+import {shippingQuoteSetup} from '../lib/shipping-registry';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { bodyLimit } from 'hono/body-limit';
+import { commerceFinanceIfEnabled } from './commerce-service';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { ApiError, type HonoEnv } from '../types';
 import {
@@ -12,7 +14,6 @@ import {
 import { commerceToken, verifyCommerceToken } from '../lib/commerce-token';
 import {
   ShippingError,
-  shippingConfiguration,
   hashShipping,
   policyIdentity,
 } from '../lib/smart-shipping';
@@ -156,7 +157,7 @@ app.openapi(
         503,
         'Checkout giai đoạn 1 chưa được bật.',
       );
-    const shipping = shippingConfiguration(c.env);
+    const {config:shipping} = shippingQuoteSetup(c.env);
     if (!c.env.COMMERCE_ENVIRONMENT)
       throw new ShippingError(
         'commerce_environment_missing',
@@ -172,6 +173,7 @@ app.openapi(
         shop_id: c.env.PANCAKE_SHOP_ID || '',
         warehouse_id: c.env.PANCAKE_WAREHOUSE_ID || '',
         dispatch_enabled: c.env.PANCAKE_GHN_DISPATCH_ENABLED === 'true',
+        direct_dispatch_enabled:c.env.SHIPPING_AUTOMATION_ENABLED==='true',
         dispatch_account_id: c.env.PANCAKE_GHN_ACCOUNT_ID,
       }),
     );
@@ -251,7 +253,7 @@ for (const kind of [
       method: 'post',
       path: `/admin/orders/{orderId}/${kind}`,
       tags: ['Commerce operations'],
-      middleware: [adminOnly] as const,
+      middleware: [adminOnly,commerceFinanceIfEnabled] as const,
       request: {
         params,
         body: { content: { 'application/json': { schema: evidenceInput } } },
@@ -359,7 +361,7 @@ app.openapi(
     const items = await c.var.db.query(
       `SELECT c.order_id,o.number,c.method,c.payment_status,c.cod_status,c.fulfillment_status,c.pancake_order_id,c.expires_at,b.state AS pos_sync_status,b.last_error,s.state AS shipment_status,s.last_error AS shipment_error
  FROM commerce_orders c JOIN orders o ON o.id=c.order_id LEFT JOIN commerce_outbox b ON b.order_id=c.order_id LEFT JOIN commerce_shipments s ON s.order_id=c.order_id
- WHERE c.payment_status='needs_attention' OR (c.payment_status='pending' AND c.expires_at<?) OR (b.state IS NOT NULL AND b.state!='synced') OR s.state='needs_attention' OR (c.fulfillment_status='delivered' AND c.cod_status NOT IN ('reconciled','not_applicable'))
+ WHERE c.payment_status='needs_attention' OR (c.payment_status='pending' AND c.expires_at<?) OR (b.state IS NOT NULL AND b.state NOT IN ('synced','canceled')) OR (s.state='needs_attention' AND o.status!='canceled') OR (c.fulfillment_status='delivered' AND c.cod_status NOT IN ('reconciled','not_applicable'))
  ORDER BY c.updated_at LIMIT 100`,
       [Date.now()],
     );
@@ -407,7 +409,7 @@ app.openapi(
     method: 'post',
     path: '/admin/orders/{orderId}/resolve-bank',
     tags: ['Commerce operations'],
-    middleware: [adminOnly] as const,
+    middleware: [adminOnly,commerceFinanceIfEnabled] as const,
     request: {
       params,
       body: {

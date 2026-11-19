@@ -151,6 +151,7 @@ export const authMiddleware = createMiddleware<HonoEnv>(async (c, next) => {
     c.set('auth', {
       role: roles.length === 1 ? roles[0] : roles,
       sub: typeof payload.sub === 'string' ? payload.sub : undefined,
+      permissions: perms,
       stripeSecretKey,
       stripeWebhookSecret,
     });
@@ -187,7 +188,7 @@ export const authMiddleware = createMiddleware<HonoEnv>(async (c, next) => {
 
   const keyHash = await hashKey(token);
   const result = await db.query<any>(
-    `SELECT role FROM api_keys WHERE key_hash = ? LIMIT 1`,
+    `SELECT id,role FROM api_keys WHERE key_hash = ? LIMIT 1`,
     [keyHash]
   );
 
@@ -197,6 +198,7 @@ export const authMiddleware = createMiddleware<HonoEnv>(async (c, next) => {
 
   c.set('auth', {
     role: result[0].role,
+    sub: `api-key:${result[0].id}`,
     stripeSecretKey,
     stripeWebhookSecret,
   });

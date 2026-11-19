@@ -32,6 +32,10 @@ import { z } from 'zod';
 import { ApiError, uuid, now, type HonoEnv } from '../types';
 import { getDb } from '../db';
 import { authMiddleware, adminOnly } from '../middleware/auth';
+const dimensionsFromDb=z.preprocess((raw)=>{
+  if(typeof raw!=='string')return raw??null;
+  try{return JSON.parse(raw);}catch{return null;}
+},z.object({l:z.number(),w:z.number(),h:z.number()}).nullable().catch(null));
 import {
   CategoryResponse,
   CategoryListResponse,
@@ -51,6 +55,13 @@ import {
 // ──────────────────────────────────────────────────────────────────────────────
 
 const publicApp = new OpenAPIHono<HonoEnv>();
+function dimensions(raw: unknown) {
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const result = ProductResponse.shape.variants.element.shape.dims_cm.safeParse(parsed ?? null);
+    return result.success ? result.data : null;
+  } catch { return null; }
+}
 
 // ── Public: list active categories (flat or tree structure) ────────────────────
 
@@ -221,6 +232,9 @@ publicApp.openapi(getCategoryProductsRoute, async (c) => {
           id: v.id,
           sku: v.sku,
           title: v.title,
+          variant_type:z.enum(['physical','digital','ai_tokens']).default('physical').parse(v.variant_type??undefined),
+          ai_token_units:v.ai_token_units??null,
+          dims_cm:dimensionsFromDb.parse(v.dims_cm),
           price_cents: v.price_cents,
           currency: v.currency ?? 'USD',
           image_url: null,
@@ -237,6 +251,7 @@ publicApp.openapi(getCategoryProductsRoute, async (c) => {
       });
       return {
         id: p.id,
+        created_at: p.created_at,
         title: p.title,
         handle: p.handle ?? null,
         status: p.status,

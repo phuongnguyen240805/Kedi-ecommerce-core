@@ -42,6 +42,7 @@ export type CheckoutConfig = {
   warehouse_id: string;
   bank: BankAccount | null;
   dispatch_enabled?: boolean;
+  direct_dispatch_enabled?:boolean;
   dispatch_account_id?: string;
 };
 export const COMMERCE_SCHEMA = `
@@ -101,6 +102,9 @@ export function receipt(sql: ShippingSql, id: string) {
   const r = row(sql, id);
   const shipment = sql.exec('SELECT state,last_error,partner_status,updated_at FROM commerce_shipments WHERE order_id=?', id).toArray()[0];
   const snapshot = JSON.parse(String(r.snapshot_json));
+  const legs=sql.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='shipping_legs'").toArray().length
+    ?sql.exec('SELECT id,kind,sequence,carrier_id,tracking_code,status,observed_at,last_error,owner FROM shipping_legs WHERE order_id=? ORDER BY created_at',id).toArray():[];
+  const outbound=legs.find(l=>l.kind==='outbound'&&(l.owner==='direct'||Number(l.observed_at)>0));
   return {
     order_id: id,
     number: String(r.number),
@@ -110,7 +114,7 @@ export function receipt(sql: ShippingSql, id: string) {
     cod_status: String(r.cod_status),
     fulfillment_status: String(r.fulfillment_status),
     progress: readOrderProgress(sql, id, { fulfillment_status: String(r.fulfillment_status), status: String(r.status), tracking_number: r.tracking_number, created_at: r.order_created_at }),
-    status_checked_at: shipment && !shipment.last_error ? new Date(Number(shipment.updated_at)).toISOString() : null,
+    status_checked_at:outbound&&Number(outbound.observed_at)>0&&!outbound.last_error?new Date(Number(outbound.observed_at)).toISOString():shipment && !shipment.last_error ? new Date(Number(shipment.updated_at)).toISOString() : null,
     currency: 'VND' as const,
     total_vnd: Number(r.total_cents),
     amount_to_collect_vnd:
@@ -133,10 +137,11 @@ export function receipt(sql: ShippingSql, id: string) {
       qty: number;
       unit_price_vnd: number;
     }[],
-    tracking_number: r.tracking_number ? String(r.tracking_number) : null,
-    shipment_status: shipment ? String(shipment.state) : 'pending',
-    shipment_error: shipment?.last_error ? String(shipment.last_error) : null,
-    carrier_status: shipment?.partner_status ? String(shipment.partner_status) : null,
+    shipping_legs:legs.map(l=>({id:String(l.id),kind:String(l.kind),sequence:Number(l.sequence),carrier:String(l.carrier_id),tracking_number:l.tracking_code?String(l.tracking_code):null,status:String(l.status),needs_attention:!!l.last_error||['exception','lost','damage','scrap'].includes(String(l.status))})),
+    tracking_number:outbound?.tracking_code?String(outbound.tracking_code):r.tracking_number ? String(r.tracking_number) : null,
+    shipment_status:outbound?String(outbound.status):shipment ? String(shipment.state) : 'pending',
+    shipment_error:outbound&&['exception','lost','damage','scrap'].includes(String(outbound.status))?'carrier_exception':outbound?.last_error?String(outbound.last_error):shipment?.last_error ? String(shipment.last_error) : null,
+    carrier_status:outbound&&outbound.status!=='unbooked'?String(outbound.status):shipment?.partner_status ? String(shipment.partner_status) : null,
     pos_sync_status: r.pancake_order_id
       ? 'synced'
       : String(
@@ -312,7 +317,7 @@ export function confirmCheckout(
     fufuni_warehouse_id: warehouse.target_id,
     shipping: selection,
     parcel,
-    dispatch_enabled: config.dispatch_enabled === true,
+    dispatch_enabled: selection.offer.execution_owner==='direct'?config.direct_dispatch_enabled===true:config.dispatch_enabled === true,
     dispatch_account_id: config.dispatch_account_id || null,
     automation_version: 2,
     items: items.map((i) => ({

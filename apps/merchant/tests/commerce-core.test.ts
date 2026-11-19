@@ -17,6 +17,8 @@ import {
   type CheckoutConfig,
 } from '../src/lib/commerce-core';
 import { commerceToken, verifyCommerceToken } from '../src/lib/commerce-token';
+import { SERVICE_SCHEMA, expireServiceHold, serviceDetail, createServiceRequest, decideServiceRequest, createRefund, recordRefundResult, recordAddressAdjustment, startActionSession, verifyActionSession, assertActionSession, assertNoOpenChanges, storeAddressQuote, serviceNotificationClaim, serviceNotificationFinish } from '../src/lib/commerce-service';
+import { ensureSchemaObjects } from '../src/lib/sql-schema';
 import { PANCAKE_SCHEMA } from '../src/lib/pancake-store';
 import {
   SHIPPING_SCHEMA,
@@ -288,13 +290,14 @@ test('SKU rename preserves order snapshot and releases reservation by stable var
   assert.equal(receipt(f.sql, order.order_id).items[0].sku, 'APPLE');
   f.db.close();
 });
-async function fixture(method: 'cod' | 'techcombank_qr' = 'cod') {
+async function fixture(method: 'cod' | 'techcombank_qr' = 'cod',owner?:'direct'|'pancake') {
   const db = new DatabaseSync(':memory:');
   const source = readFileSync(new URL('../src/do.ts', import.meta.url), 'utf8');
   db.exec(source.match(/const SCHEMA = `([\s\S]*?)`;/)![1]);
   db.exec(PANCAKE_SCHEMA);
   db.exec(SHIPPING_SCHEMA);
   db.exec(COMMERCE_SCHEMA);
+  ensureSchemaObjects({exec:(q:string)=>{const rows=db.prepare(q).all() as Record<string,unknown>[];return {toArray:()=>rows};}},SERVICE_SCHEMA);
   db.exec(`INSERT INTO currencies(id,code,display_name,decimal_places) VALUES('vnd','VND','VND',0);
  INSERT INTO products(id,title,status) VALUES('p','Apple','active');
  INSERT INTO variants(id,product_id,sku,title,price_cents,currency,weight_g,status) VALUES('v','p','APPLE','Apple',100000,'VND',500,'active');
@@ -334,6 +337,7 @@ async function fixture(method: 'cod' | 'techcombank_qr' = 'cod') {
   const offer: ShippingOffer = {
     id: 'ghn:2',
     provider: 'ghn',
+    execution_owner:owner,
     service_type_id: 2,
     service_name: 'Test',
     currency: 'VND',
@@ -389,6 +393,164 @@ async function fixture(method: 'cod' | 'techcombank_qr' = 'cod') {
     transaction(() => confirmCheckout(sql, input, cfg, now));
   return { db, sql, transaction, input, cfg, checkout };
 }
+
+test('checkout freezes direct dispatch separately from the legacy Pancake flag',async()=>{
+  for(const enabled of [false,true]){
+    const f=await fixture('cod','direct');f.cfg.dispatch_enabled=true;f.cfg.direct_dispatch_enabled=enabled;
+    f.checkout();const snapshot=JSON.parse(String(f.db.prepare('SELECT snapshot_json FROM commerce_orders').get()?.snapshot_json));
+    assert.equal(snapshot.dispatch_enabled,enabled);f.db.close();
+  }
+});
+
+test('service requests deduplicate, reject changed retries and hold dispatch until rejected',async()=>{
+  const f=await fixture(),order=f.checkout();
+  const v=serviceDetail(f.sql,order.order_id).order_version;
+  const input={idempotency_key:crypto.randomUUID(),order_version:v,kind:'cancel' as const,reason:'Khách không còn nhu cầu đặt giỏ quà.'};
+  const first=f.transaction(()=>createServiceRequest(f.sql,order.order_id,input,'customer',now));
+  assert.equal(first.requests.length,1);assert.throws(()=>assertNoOpenChanges(f.sql,order.order_id),/tạm dừng/);
+  assert.equal(f.transaction(()=>createServiceRequest(f.sql,order.order_id,input,'customer',now)).requests.length,1);
+  assert.throws(()=>f.transaction(()=>createServiceRequest(f.sql,order.order_id,{...input,reason:'Một lý do khác đã được thay đổi.'},'customer',now)),/thay đổi/);
+  const result=f.transaction(()=>decideServiceRequest(f.sql,order.order_id,{request_id:first.requests[0].id,order_version:first.order_version,action:'reject',evidence:'Đã liên hệ khách và xác nhận giữ đơn.',external_cleared:false},'ops',now));
+  assert.equal(result.requests[0].status,'rejected');assert.doesNotThrow(()=>assertNoOpenChanges(f.sql,order.order_id));f.db.close();
+});
+test('stale order version and active external lease prevent customer changes',async()=>{
+  const f=await fixture(),o=f.checkout(),v=serviceDetail(f.sql,o.order_id).order_version;
+  f.db.prepare('UPDATE orders SET status=status WHERE id=?').run(o.order_id);
+  const input={idempotency_key:crypto.randomUUID(),order_version:v,kind:'cancel' as const,reason:'Đề nghị hủy đơn trước khi chuẩn bị.'};
+  assert.throws(()=>f.transaction(()=>createServiceRequest(f.sql,o.order_id,input,'customer',now)),/vừa thay đổi/);
+  f.db.prepare('UPDATE commerce_outbox SET lease_until=? WHERE order_id=?').run(now+60_000,o.order_id);
+  assert.throws(()=>f.transaction(()=>createServiceRequest(f.sql,o.order_id,{...input,order_version:serviceDetail(f.sql,o.order_id).order_version},'customer',now)),/đang đồng bộ/);f.db.close();
+});
+test('approved cancellation completes atomically, releases held stock and cannot complete twice',async()=>{
+  const f=await fixture('techcombank_qr'),o=f.checkout();let d=serviceDetail(f.sql,o.order_id);
+  d=f.transaction(()=>createServiceRequest(f.sql,o.order_id,{idempotency_key:crypto.randomUUID(),order_version:d.order_version,kind:'cancel',reason:'Khách xác nhận muốn hủy đơn chưa thanh toán.'},'customer',now));
+  const id=d.requests[0].id;
+  d=f.transaction(()=>decideServiceRequest(f.sql,o.order_id,{request_id:id,order_version:d.order_version,action:'approve',evidence:'Đã kiểm tra chưa nhận tiền và chưa giao POS.',external_cleared:false},'ops',now));
+  d=f.transaction(()=>decideServiceRequest(f.sql,o.order_id,{request_id:id,order_version:d.order_version,action:'complete',evidence:'Đã ngừng xử lý đơn và kiểm tra kho giữ.',external_cleared:false},'ops',now));
+  assert.equal(receipt(f.sql,o.order_id).order_status,'canceled');assert.equal(f.db.prepare('SELECT reserved FROM inventory').get()?.reserved,0);
+  assert.throws(()=>f.transaction(()=>decideServiceRequest(f.sql,o.order_id,{request_id:id,order_version:d.order_version,action:'complete',evidence:'Thử hoàn tất một lần nữa không hợp lệ.',external_cleared:false},'ops',now)),/kết thúc/);f.db.close();
+});
+test('paid cancellation creates a refund obligation; external uncertain creation needs explicit clearance',async()=>{
+  const f=await fixture('techcombank_qr'),o=f.checkout();
+  f.transaction(()=>recordEvidence(f.sql,o.order_id,'bank_transfer',proof(o),'finance',now));
+  f.db.prepare('UPDATE commerce_outbox SET create_attempted=1 WHERE order_id=?').run(o.order_id);
+  let d=serviceDetail(f.sql,o.order_id);
+  d=f.transaction(()=>createServiceRequest(f.sql,o.order_id,{idempotency_key:crypto.randomUUID(),order_version:d.order_version,kind:'cancel',reason:'Yêu cầu hủy đơn đã thanh toán và hoàn tiền.'},'customer',now));
+  const id=d.requests[0].id;
+  d=f.transaction(()=>decideServiceRequest(f.sql,o.order_id,{request_id:id,order_version:d.order_version,action:'approve',evidence:'Shop duyệt yêu cầu của khách hàng.',external_cleared:false},'ops',now));
+  assert.throws(()=>f.transaction(()=>decideServiceRequest(f.sql,o.order_id,{request_id:id,order_version:d.order_version,action:'complete',evidence:'Chưa xác minh bên POS đã ngừng xử lý.',external_cleared:false},'ops',now)),/POS/);
+  d=f.transaction(()=>decideServiceRequest(f.sql,o.order_id,{request_id:id,order_version:d.order_version,action:'complete',evidence:'Đã xác minh POS không còn đơn hoạt động.',external_cleared:true},'ops',now));
+  assert.equal(d.refunds.length,1);assert.equal(d.refunds[0].amount_vnd,o.total_vnd);assert.equal(d.money.refundable_vnd,0);f.db.close();
+});
+test('refund ledger caps aggregate amounts, reserves unknown outcomes, and requires independent confirmation',async()=>{
+  const f=await fixture('techcombank_qr'),o=f.checkout();f.transaction(()=>recordEvidence(f.sql,o.order_id,'bank_transfer',proof(o),'finance',now));
+  let d=serviceDetail(f.sql,o.order_id);
+  d=f.transaction(()=>createRefund(f.sql,o.order_id,{idempotency_key:crypto.randomUUID(),order_version:d.order_version,amount_vnd:100000,reason:'Hoàn một phần theo quyết định CSKH.'},'finance-a',now));
+  const id=String(d.refunds[0].id);
+  assert.throws(()=>f.transaction(()=>createRefund(f.sql,o.order_id,{idempotency_key:crypto.randomUUID(),order_version:d.order_version,amount_vnd:130000,reason:'Lệnh hoàn vượt số tiền còn khả dụng.'},'finance-b',now)),/vượt/);
+  d=f.transaction(()=>recordRefundResult(f.sql,o.order_id,{refund_id:id,order_version:d.order_version,status:'unknown',evidence:'Ngân hàng chưa trả kết quả, cần đối soát.'},'finance-a',now));
+  assert.equal(d.money.refundable_vnd,120000);
+  assert.throws(()=>f.transaction(()=>recordRefundResult(f.sql,o.order_id,{refund_id:id,order_version:d.order_version,status:'succeeded',reference:'BANK-REF-001',evidence:'Chứng từ giao dịch đã hoàn tiền thành công.'},'finance-a',now)),/người xác nhận khác/);
+  d=f.transaction(()=>recordRefundResult(f.sql,o.order_id,{refund_id:id,order_version:d.order_version,status:'succeeded',reference:'BANK-REF-001',evidence:'Kế toán thứ hai đối soát chứng từ thành công.'},'finance-b',now));
+  assert.equal(d.money.refunded_vnd,100000);assert.equal(d.money.refundable_vnd,120000);f.db.close();
+});
+test('failed refunds free the reserved amount and cannot be silently reopened',async()=>{
+  const f=await fixture('techcombank_qr'),o=f.checkout();f.transaction(()=>recordEvidence(f.sql,o.order_id,'bank_transfer',proof(o),'finance',now));let d=serviceDetail(f.sql,o.order_id);
+  d=f.transaction(()=>createRefund(f.sql,o.order_id,{idempotency_key:crypto.randomUUID(),order_version:d.order_version,amount_vnd:o.total_vnd,reason:'Hoàn tiền theo yêu cầu khách hàng.'},'finance-a',now));
+  d=f.transaction(()=>recordRefundResult(f.sql,o.order_id,{refund_id:String(d.refunds[0].id),order_version:d.order_version,status:'failed',evidence:'Đã xác minh ngân hàng từ chối và chưa trừ tiền.'},'finance-b',now));
+  assert.equal(d.money.refundable_vnd,o.total_vnd);f.db.close();
+});
+test('verification attempts persist, expire, bind to order and reject reused codes',async()=>{
+  const f=await fixture(),o=f.checkout(),id=crypto.randomUUID();f.transaction(()=>startActionSession(f.sql,o.order_id,id,'correct',now));
+  for(let i=0;i<5;i++)assert.equal(f.transaction(()=>verifyActionSession(f.sql,o.order_id,id,'wrong','token',now)).verified,false);
+  assert.equal(f.transaction(()=>verifyActionSession(f.sql,o.order_id,id,'correct','token',now)).verified,false);
+  const id2=crypto.randomUUID();f.transaction(()=>startActionSession(f.sql,o.order_id,id2,'correct',now+61_000));
+  assert.equal(f.transaction(()=>verifyActionSession(f.sql,o.order_id,id2,'correct','token',now+62_000)).verified,true);
+  assert.equal(f.transaction(()=>verifyActionSession(f.sql,o.order_id,id2,'correct','token',now+62_000)).verified,false);
+  assert.doesNotThrow(()=>assertActionSession(f.sql,o.order_id,'token',now+63_000));
+  assert.throws(()=>assertActionSession(f.sql,crypto.randomUUID(),'token',now+63_000),/xác minh/);
+  assert.throws(()=>assertActionSession(f.sql,o.order_id,'token',now+1_000_000),/xác minh/);f.db.close();
+});
+test('address change is quoted against order version and leaves the original intact until approval',async()=>{
+  const f=await fixture(),o=f.checkout();let d=serviceDetail(f.sql,o.order_id);
+  const snap=JSON.parse(String(f.db.prepare('SELECT snapshot_json FROM commerce_orders').get()?.snapshot_json));
+  const next={...f.input.recipient,address:'99 New Street'};
+  const quote=f.transaction(()=>storeAddressQuote(f.sql,o.order_id,d.order_version,next,snap.shipping.offer,now));
+  d=f.transaction(()=>createServiceRequest(f.sql,o.order_id,{idempotency_key:crypto.randomUUID(),order_version:d.order_version,kind:'address',reason:'Khách yêu cầu giao đến địa chỉ mới.',quote_id:quote.id},'customer',now));
+  assert.equal(d.recipient.address,'12 Test Street');
+  const id=d.requests[0].id;
+  d=f.transaction(()=>decideServiceRequest(f.sql,o.order_id,{request_id:id,order_version:d.order_version,action:'approve',evidence:'Shop đồng ý giữ nguyên phí đã báo cho khách.',external_cleared:false},'ops',now));
+  d=f.transaction(()=>decideServiceRequest(f.sql,o.order_id,{request_id:id,order_version:d.order_version,action:'complete',evidence:'Đã kiểm tra báo giá và địa chỉ trước xuất hàng.',external_cleared:false},'ops',now));
+  assert.equal(d.recipient.address,'99 New Street');assert.equal(receipt(f.sql,o.order_id).total_vnd,o.total_vnd);f.db.close();
+});
+test('expired address quote cannot change a frozen order',async()=>{
+  const f=await fixture(),o=f.checkout(),d=serviceDetail(f.sql,o.order_id),snap=JSON.parse(String(f.db.prepare('SELECT snapshot_json FROM commerce_orders').get()?.snapshot_json));
+  const quote=storeAddressQuote(f.sql,o.order_id,d.order_version,f.input.recipient,snap.shipping.offer,now);
+  assert.throws(()=>f.transaction(()=>createServiceRequest(f.sql,o.order_id,{idempotency_key:crypto.randomUUID(),order_version:d.order_version,kind:'address',reason:'Thay đổi địa chỉ khi báo giá đã hết hạn.',quote_id:quote.id},'customer',now+300_001)),/báo giá/);f.db.close();
+});
+test('returns cap per-item quantities across open requests and never restock on request completion',async()=>{
+  const f=await fixture(),o=f.checkout();f.db.prepare("UPDATE commerce_orders SET pancake_order_id='pos-return' WHERE order_id=?").run(o.order_id);for(const state of ['ready_to_ship','shipped','delivered'] as const)f.transaction(()=>updateFulfillment(f.sql,o.order_id,{state,tracking_number:'GHN-return',evidence:'Bằng chứng trạng thái vận chuyển hợp lệ.'},'ops'));
+  let d=serviceDetail(f.sql,o.order_id);d=f.transaction(()=>createServiceRequest(f.sql,o.order_id,{idempotency_key:crypto.randomUUID(),order_version:d.order_version,kind:'return',reason:'Một phần trái cây bị dập khi nhận hàng.',items:[{sku:'APPLE',qty:1}]},'customer'));
+  assert.throws(()=>f.transaction(()=>createServiceRequest(f.sql,o.order_id,{idempotency_key:crypto.randomUUID(),order_version:d.order_version,kind:'return',reason:'Yêu cầu thêm vượt số lượng đã mua.',items:[{sku:'APPLE',qty:2}]},'customer')),/vượt/);
+  assert.equal(f.db.prepare('SELECT on_hand FROM inventory').get()?.on_hand,10);f.db.close();
+});
+test('service notifications are leased and failed deliveries are retryable independently',async()=>{
+  const f=await fixture(),o=f.checkout(),d=serviceDetail(f.sql,o.order_id);createServiceRequest(f.sql,o.order_id,{idempotency_key:crypto.randomUUID(),order_version:d.order_version,kind:'cancel',reason:'Khách đề nghị hủy đơn trước khi xử lý.'},'customer',now);
+  const jobs=f.transaction(()=>serviceNotificationClaim(f.sql,now));assert.equal(jobs.length,1);assert.equal(f.transaction(()=>serviceNotificationClaim(f.sql,now)).length,0);
+  serviceNotificationFinish(f.sql,String(jobs[0].id),false,now);assert.equal(f.transaction(()=>serviceNotificationClaim(f.sql,now+900_001)).length,1);f.db.close();
+});
+test('prepaid address increase requires the exact supplemental receipt before totals and recipient change',async()=>{
+  const f=await fixture('techcombank_qr'),o=f.checkout();f.transaction(()=>recordEvidence(f.sql,o.order_id,'bank_transfer',proof(o),'finance',now));let d=serviceDetail(f.sql,o.order_id);
+  const snap=JSON.parse(String(f.db.prepare('SELECT snapshot_json FROM commerce_orders').get()?.snapshot_json));
+  const quote=storeAddressQuote(f.sql,o.order_id,d.order_version,{...f.input.recipient,address:'99 New Street'},{...snap.shipping.offer,customer_fee_vnd:40000,carrier_fee_vnd:50000},now);
+  assert.equal(quote.customer_difference_vnd,20000);
+  d=f.transaction(()=>createServiceRequest(f.sql,o.order_id,{idempotency_key:crypto.randomUUID(),order_version:d.order_version,kind:'address',reason:'Khách đồng ý phí mới khi đổi địa chỉ.',quote_id:quote.id},'customer',now));const requestId=d.requests[0].id;
+  d=f.transaction(()=>decideServiceRequest(f.sql,o.order_id,{request_id:requestId,order_version:d.order_version,action:'approve',evidence:'Đã xác minh phương án giao và phí tăng.',external_cleared:false,pricing:'quoted'},'ops',now));
+  const complete=()=>decideServiceRequest(f.sql,o.order_id,{request_id:requestId,order_version:d.order_version,action:'complete',evidence:'Đã nhận đủ tiền và xác nhận vận chuyển.',external_cleared:false,pricing:'quoted'},'ops',now);
+  assert.throws(()=>f.transaction(complete),/chênh lệch/);assert.equal(serviceDetail(f.sql,o.order_id).recipient.address,'12 Test Street');
+  d=f.transaction(()=>recordAddressAdjustment(f.sql,o.order_id,{order_version:d.order_version,request_id:requestId,transaction_id:'BANK-EXTRA-001',amount_vnd:20000,evidence:'Chứng từ ngân hàng xác nhận tiền phí bổ sung.',received_at:new Date(now).toISOString()},'finance',now));
+  d=f.transaction(complete);assert.equal(d.recipient.address,'99 New Street');assert.equal(receipt(f.sql,o.order_id).total_vnd,240000);assert.equal(receipt(f.sql,o.order_id).payment_status,'paid');f.db.close();
+});
+test('prepaid address decrease requires a confirmed partial refund before applying the lower total',async()=>{
+  const f=await fixture('techcombank_qr'),o=f.checkout();f.transaction(()=>recordEvidence(f.sql,o.order_id,'bank_transfer',proof(o),'finance',now));let d=serviceDetail(f.sql,o.order_id);
+  const snap=JSON.parse(String(f.db.prepare('SELECT snapshot_json FROM commerce_orders').get()?.snapshot_json));
+  const quote=storeAddressQuote(f.sql,o.order_id,d.order_version,f.input.recipient,{...snap.shipping.offer,customer_fee_vnd:10000},now);
+  d=f.transaction(()=>createServiceRequest(f.sql,o.order_id,{idempotency_key:crypto.randomUUID(),order_version:d.order_version,kind:'address',reason:'Khách đổi địa chỉ có phí thấp hơn.',quote_id:quote.id},'customer',now));const requestId=d.requests[0].id;
+  d=f.transaction(()=>decideServiceRequest(f.sql,o.order_id,{request_id:requestId,order_version:d.order_version,action:'approve',evidence:'Đã duyệt địa chỉ mới và phần phí giảm.',external_cleared:false,pricing:'quoted'},'ops',now));
+  d=f.transaction(()=>createRefund(f.sql,o.order_id,{request_id:requestId,idempotency_key:crypto.randomUUID(),order_version:d.order_version,amount_vnd:10000,reason:'Hoàn phần chênh lệch phí giao hàng đã nhận.'},'finance-a',now));
+  d=f.transaction(()=>recordRefundResult(f.sql,o.order_id,{refund_id:String(d.refunds[0].id),order_version:d.order_version,status:'succeeded',reference:'BANK-SHIPPING-REFUND',evidence:'Kế toán xác minh hoàn phần phí chênh lệch.'},'finance-b',now));
+  d=f.transaction(()=>decideServiceRequest(f.sql,o.order_id,{request_id:requestId,order_version:d.order_version,action:'complete',evidence:'Đã hoàn tiền chênh lệch và xác minh giao mới.',external_cleared:false,pricing:'quoted'},'ops',now));
+  assert.equal(receipt(f.sql,o.order_id).total_vnd,210000);assert.equal(d.money.refunded_vnd,10000);f.db.close();
+});
+test('settling an initially unpaid address change creates the confirmation outbox exactly once',async()=>{
+  const f=await fixture('techcombank_qr'),o=f.checkout();let d=serviceDetail(f.sql,o.order_id);const snap=JSON.parse(String(f.db.prepare('SELECT snapshot_json FROM commerce_orders').get()?.snapshot_json));
+  const quote=storeAddressQuote(f.sql,o.order_id,d.order_version,f.input.recipient,{...snap.shipping.offer,customer_fee_vnd:40000},now);
+  d=f.transaction(()=>createServiceRequest(f.sql,o.order_id,{idempotency_key:crypto.randomUUID(),order_version:d.order_version,kind:'address',reason:'Khách chưa trả tiền và muốn đổi địa chỉ.',quote_id:quote.id},'customer',now));const id=d.requests[0].id;
+  d=f.transaction(()=>decideServiceRequest(f.sql,o.order_id,{request_id:id,order_version:d.order_version,action:'approve',evidence:'Shop duyệt địa chỉ và hướng dẫn trả tổng mới.',external_cleared:false,pricing:'quoted'},'ops',now));
+  d=f.transaction(()=>recordAddressAdjustment(f.sql,o.order_id,{request_id:id,order_version:d.order_version,transaction_id:'BANK-NEW-TOTAL',amount_vnd:240000,evidence:'Kế toán xác minh đã nhận đầy đủ tổng tiền mới.',received_at:new Date(now).toISOString()},'finance',now));
+  f.transaction(()=>decideServiceRequest(f.sql,o.order_id,{request_id:id,order_version:d.order_version,action:'complete',evidence:'Hoàn tất thay đổi sau khi nhận đủ tổng tiền mới.',external_cleared:false,pricing:'quoted'},'ops',now));
+  assert.equal(receipt(f.sql,o.order_id).order_status,'paid');assert.equal(f.db.prepare('SELECT COUNT(*) n FROM commerce_outbox').get()?.n,1);f.db.close();
+});
+test('late credit after cancellation remains canceled and can be refunded with bank evidence',async()=>{
+  const f=await fixture('techcombank_qr'),o=f.checkout();f.transaction(()=>cancelPendingOrder(f.sql,o.order_id,'Đã kiểm tra chưa có tiền trước khi hủy.','ops'));
+  f.transaction(()=>recordEvidence(f.sql,o.order_id,'bank_transfer',proof(o),'finance',now));let d=serviceDetail(f.sql,o.order_id);
+  d=f.transaction(()=>createRefund(f.sql,o.order_id,{idempotency_key:crypto.randomUUID(),order_version:d.order_version,amount_vnd:o.total_vnd,reason:'Hoàn khoản chuyển muộn sau khi đơn đã hủy.'},'finance-a',now));
+  f.transaction(()=>recordRefundResult(f.sql,o.order_id,{refund_id:String(d.refunds[0].id),order_version:d.order_version,status:'succeeded',reference:'BANK-LATE-REFUND',evidence:'Đã đối soát chứng từ hoàn khoản nhận muộn.'},'finance-b',now));
+  assert.equal(receipt(f.sql,o.order_id).order_status,'canceled');assert.equal(receipt(f.sql,o.order_id).payment_status,'refunded');assert.throws(()=>assertNoOpenChanges(f.sql,o.order_id),/đối soát/);f.db.close();
+});
+test('configured hold expiry releases only an eligible unpaid order and refuses a paid order',async()=>{
+  const f=await fixture('techcombank_qr'),o=f.checkout();assert.throws(()=>f.transaction(()=>expireServiceHold(f.sql,o.order_id,now)),/đủ điều kiện/);
+  f.transaction(()=>expireServiceHold(f.sql,o.order_id,Number(o.expires_at)+1));assert.equal(receipt(f.sql,o.order_id).order_status,'canceled');assert.equal(f.db.prepare('SELECT reserved FROM inventory').get()?.reserved,0);f.db.close();
+  const paid=await fixture('techcombank_qr'),p=paid.checkout();paid.transaction(()=>recordEvidence(paid.sql,p.order_id,'bank_transfer',proof(p),'finance',now));assert.throws(()=>paid.transaction(()=>expireServiceHold(paid.sql,p.order_id,Number(p.expires_at)+1)),/đủ điều kiện/);paid.db.close();
+});
+test('return completion requires a traceable resolution and never increases sellable stock',async()=>{
+  const f=await fixture(),o=f.checkout();f.db.prepare("UPDATE commerce_orders SET pancake_order_id='pos-quality',fulfillment_status='delivered' WHERE order_id=?").run(o.order_id);let d=serviceDetail(f.sql,o.order_id);
+  d=f.transaction(()=>createServiceRequest(f.sql,o.order_id,{idempotency_key:crypto.randomUUID(),order_version:d.order_version,kind:'return',reason:'Kiểm tra lô hàng có trái cây bị dập.',items:[{sku:'APPLE',qty:1}]},'customer',now));const id=d.requests[0].id;
+  d=f.transaction(()=>decideServiceRequest(f.sql,o.order_id,{request_id:id,order_version:d.order_version,action:'approve',evidence:'Shop duyệt kiểm tra hàng đã nhận lại.',external_cleared:false,pricing:'quoted'},'ops',now));
+  assert.throws(()=>f.transaction(()=>decideServiceRequest(f.sql,o.order_id,{request_id:id,order_version:d.order_version,action:'complete',evidence:'Chưa có mã theo dõi đơn giao bù.',external_cleared:false,pricing:'quoted',resolution:'replacement'},'ops',now)),/mã đơn/);
+  f.transaction(()=>decideServiceRequest(f.sql,o.order_id,{request_id:id,order_version:d.order_version,action:'complete',evidence:'Kiểm tra lô và cách ly hàng thu hồi.',external_cleared:false,pricing:'quoted',resolution:'return_inspection',lot_reference:'LOT-TEST-001',disposition:'quarantine'},'ops',now));
+  assert.equal(f.db.prepare('SELECT disposition FROM commerce_return_outcomes').get()?.disposition,'quarantine');assert.equal(f.db.prepare('SELECT on_hand FROM inventory').get()?.on_hand,10);f.db.close();
+});
 test('COD creates order, snapshot, unpaid payment, holds and outbox atomically; exact retry does not duplicate', async () => {
   const f = await fixture();
   const first = f.checkout(),
