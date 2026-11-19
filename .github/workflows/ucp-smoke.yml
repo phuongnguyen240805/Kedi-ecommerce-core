@@ -35,20 +35,29 @@ jobs:
           done
           sleep 10
           kill "$tail_pid" 2>/dev/null || true
-          PROBE_LOG="$RUNNER_TEMP/ucp-tail.json" python3 - <<'PY'
+          PROBE_LOG="$RUNNER_TEMP/ucp-tail.json" PROBE_ERROR="$RUNNER_TEMP/ucp-tail-error.txt" python3 - <<'PY'
           import json, os
           from pathlib import Path
           raw=Path(os.environ['PROBE_LOG']).read_text()
+          print('Tail bytes captured:',len(raw))
+          for line in Path(os.environ['PROBE_ERROR']).read_text().splitlines():
+              if any(word in line.lower() for word in ['error','failed','permission','denied']): print('Tail diagnostic:',line[:250])
           decoder=json.JSONDecoder()
           while raw.strip():
               raw=raw.lstrip()
               try:
                   event,end=decoder.raw_decode(raw)
               except ValueError:
-                  break
-              raw=raw[end:]
-              if 'deploy_probe='+os.environ['GITHUB_RUN_ID'] not in str(event.get('event',{}).get('request',{}).get('url','')):
+                  start=raw.find('{',1)
+                  if start<0: break
+                  raw=raw[start:]
                   continue
+              raw=raw[end:]
+              if not isinstance(event,dict): continue
+              request=event.get('event',{}).get('request',{})
+              is_probe='deploy_probe='+os.environ['GITHUB_RUN_ID'] in str(request.get('url',''))
+              is_rpc=event.get('event',{}).get('rpcMethod')=='query'
+              if not is_probe and not is_rpc: continue
               for exception in event.get('exceptions',[]):
                   print('Probe exception:',exception.get('name'),exception.get('message'))
               for log in event.get('logs',[]):
