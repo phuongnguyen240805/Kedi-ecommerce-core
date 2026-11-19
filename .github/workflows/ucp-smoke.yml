@@ -23,10 +23,10 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         shell: bash
         run: |
-          npx wrangler tail merchant --format=json > "$RUNNER_TEMP/ucp-tail.json" 2> "$RUNNER_TEMP/ucp-tail-error.txt" &
+          ./node_modules/.bin/wrangler tail merchant --format=json > "$RUNNER_TEMP/ucp-tail.json" 2> "$RUNNER_TEMP/ucp-tail-error.txt" &
           tail_pid=$!
           trap 'kill "$tail_pid" 2>/dev/null || true' EXIT
-          sleep 10
+          sleep 30
           failed=0
           for path in /.well-known/ucp /ucp/v1/products; do
             status=$(curl --max-time 25 -s -o /dev/null -w '%{http_code}' "https://merchant.gofiber-phuongnguyen.workers.dev$path?deploy_probe=$GITHUB_RUN_ID")
@@ -41,7 +41,7 @@ jobs:
           raw=Path(os.environ['PROBE_LOG']).read_text()
           print('Tail bytes captured:',len(raw))
           for line in Path(os.environ['PROBE_ERROR']).read_text().splitlines():
-              if any(word in line.lower() for word in ['error','failed','permission','denied']): print('Tail diagnostic:',line[:250])
+              print('Tail diagnostic:',line[:250])
           decoder=json.JSONDecoder()
           while raw.strip():
               raw=raw.lstrip()
