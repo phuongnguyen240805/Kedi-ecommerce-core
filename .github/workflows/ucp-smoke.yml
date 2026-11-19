@@ -23,7 +23,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         shell: bash
         run: |
-          ./node_modules/.bin/wrangler tail merchant --format=json > "$RUNNER_TEMP/ucp-tail.json" 2> "$RUNNER_TEMP/ucp-tail-error.txt" &
+          npm exec --workspace merchant -- wrangler tail merchant --format=json > "$RUNNER_TEMP/ucp-tail.json" 2> "$RUNNER_TEMP/ucp-tail-error.txt" &
           tail_pid=$!
           trap 'kill "$tail_pid" 2>/dev/null || true' EXIT
           sleep 30
