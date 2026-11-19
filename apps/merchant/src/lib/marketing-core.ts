@@ -1,7 +1,8 @@
+import {EXPERIMENT_SCHEMA,experimentPayload} from './marketing-admin';
 import {z} from 'zod';
 import type {ShippingSql} from './shipping-store';
 import {ShippingError} from './smart-shipping';
-export const MARKETING_SCHEMA=`
+export const MARKETING_SCHEMA=EXPERIMENT_SCHEMA+`
 CREATE TABLE IF NOT EXISTS marketing_subscribers(id TEXT NOT NULL UNIQUE,email TEXT PRIMARY KEY,status TEXT NOT NULL,
  nonce TEXT NOT NULL,created_at INTEGER NOT NULL,confirmed_at INTEGER,updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS marketing_consent(id TEXT PRIMARY KEY,email TEXT NOT NULL,event TEXT NOT NULL,purpose TEXT NOT NULL,source TEXT NOT NULL,policy_version TEXT NOT NULL,created_at INTEGER NOT NULL);
@@ -25,7 +26,7 @@ export const subscriptionInput=z.object({email:emailAddress,consent:z.literal(tr
 export type SubscriptionInput=z.infer<typeof subscriptionInput>;
 export type MarketingKind='confirmation'|'welcome'|'abandoned'|'post_purchase'|'win_back';
 function job(sql:ShippingSql,email:string,kind:MarketingKind,key:string,payload:Record<string,unknown>,due:number,now:number){
- sql.exec('INSERT OR IGNORE INTO marketing_jobs(id,email,kind,payload,dedupe_key,due_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',crypto.randomUUID(),email,kind,JSON.stringify({...payload,template_version:'v1'}),key,due,now,now);
+ sql.exec('INSERT OR IGNORE INTO marketing_jobs(id,email,kind,payload,dedupe_key,due_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',crypto.randomUUID(),email,kind,JSON.stringify({...payload,...experimentPayload(sql,email,kind,now),template_version:'v1'}),key,due,now,now);
 }
 export function subscribeMarketing(sql:ShippingSql,raw:SubscriptionInput,policy:string,now=Date.now()){
  const input=subscriptionInput.parse(raw);z.string().min(1).max(100).parse(policy);

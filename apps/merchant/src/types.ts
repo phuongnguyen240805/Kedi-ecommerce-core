@@ -37,6 +37,9 @@ export type Env = ShippingEnv & {
   COMMERCE_EXPIRE_UNPAID_ENABLED?: string;
   COMMERCE_EVIDENCE_BUCKET?: R2Bucket;
   COMMERCE_SERVICE_FINANCE_SUBJECTS?: string;
+  MARKETING_AI_ENABLED?:string;
+  MARKETING_AI_MODEL?:string;
+  MARKETING_OPENAI_API_KEY?:string;
   MARKETING_ENABLED?:string;
   MARKETING_SEND_ENABLED?:string;
   MARKETING_POLICY_VERSION?:string;
@@ -304,6 +307,9 @@ export type DOStub = {
   shoppingConsume:(id:string,selection:import('./lib/shopping').ShoppingSelection,expiresAt:number)=>Promise<ReturnType<MerchantDO['shoppingConsume']>>;
   shoppingAiAllow:(client:string)=>Promise<boolean>;
   feedPut:(sku:string,config:import('./lib/product-feeds').FeedOffer,storeUrl:string)=>Promise<{saved:boolean}>;
+  marketingRfm:(cursor:string)=>Promise<ReturnType<MerchantDO["marketingRfm"]>>;
+  marketingExperiment:(raw:Parameters<MerchantDO["marketingExperiment"]>[0])=>Promise<{id:string}>;
+  marketingExperimentReport:()=>Promise<ReturnType<MerchantDO["marketingExperimentReport"]>>;
   marketingInit:()=>Promise<void>;
   marketingSubscribe:(input:import('./lib/marketing-core').SubscriptionInput,policy:string)=>Promise<{accepted:boolean}>;
   marketingConfirm:(id:string,nonce:string,policy:string)=>Promise<{confirmed:boolean}>;

@@ -8,8 +8,8 @@ Date: 2026-11-19. Changes are delivered in independently validated commits to ma
 | 1 | UCP/payment transaction correctness and regression gate | Implemented; local quality gate passed |
 | 2 | One POD provider, international checkout, durable fulfillment | Pilot implemented; live merchant/sample acceptance pending |
 | 3 | Subscriber/consent, email queue/automation and product feeds | Implemented; local gates passed; sender/feed account activation pending |
-| 4 | Shopping MCP, AI shopping and safe checkout handoff | Pending |
-| 5 | Additional providers, reconciliation, marketing admin/AI and enabled OpenAI integration | Pending |
+| 4 | Shopping MCP, AI shopping and safe checkout handoff | Pilot implemented; frontend local gates passed and pushed; external connector activation pending |
+| 5 | Marketing admin/RFM/A-B/AI, reconciliation and enabled OpenAI integration | Marketing admin implemented and under validation; bank automation/manual fallback and external OpenAI access remain conditional |
 
 ## Phase 1
 
@@ -40,3 +40,7 @@ User selected D:/monorepo-project-workspace/fufuni as the authoritative backend 
 Merged-source validation: phase 1–3 regression passed 138 tests; shopping MCP/AI tests passed 5 tests, including real Worker/DO transport and atomic handoff/rate budget. Phase 4 frontend/browser and full delivery checks remain in progress.
 
 2026-11-19: User supplied https://github.com/phuongnguyen240805/Kedi-ecommerce-core.git as the new backend destination. Its remote has no refs yet. First consolidated source push includes existing Commerce/Shipping/Admin work plus phase 1–3 and the tested shopping MCP backend pilot. Backend typecheck and 143 backend + 4 admin tests pass. MCP/AI frontend delivery is still in progress; production activation and external service access remain pending.
+
+Phase 4 FE delivered as 014437f: 263 tests, typecheck/boundaries/lint, production build and 3 mocked Chrome scenarios. New backend d2f3261 GitHub quality job succeeded; deployment preflight failed due missing credentials. Phase 5 adds read-only financial/RFM reports, explicit A/B publication and review-only AI drafts. See kedimuse-shopping-marketing-admin.md for exact limits and activation prerequisites.
+
+Phase 5 local gates: 147 backend tests, 6 Admin UI tests, merchant/client TypeScript checks and production Admin build passed. CI gate now includes client workspace typecheck/tests. Marketing changes do not activate email sending, AI calls or any provider account.

@@ -1,3 +1,4 @@
+import {EXPERIMENT_SCHEMA,createExperiment,marketingRfm,experimentReport} from './lib/marketing-admin';
 import * as shippingFlow from './lib/shipping-workflow';
 /**
  * MIT License
@@ -1410,7 +1411,10 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
   shoppingAiAllow(client:string){this.ensureInitialized();ensureSchemaObjects(this.sql,SHOPPING_SCHEMA);return this.ctx.storage.transactionSync(()=>allowShoppingAi(this.sql,client));}
   shoppingConsume(id:string,selection:ShoppingSelection,expiresAt:number){this.podInit();ensureSchemaObjects(this.sql,FEED_SCHEMA);ensureSchemaObjects(this.sql,SHOPPING_SCHEMA);return this.ctx.storage.transactionSync(()=>consumeShopping(this.sql,feedSnapshot(this.sql).offers,id,selection,expiresAt));}
   feedPut(sku:string,config:FeedOffer,storeUrl:string){this.podInit();ensureSchemaObjects(this.sql,FEED_SCHEMA);return this.ctx.storage.transactionSync(()=>putFeedOffer(this.sql,sku,config,storeUrl));}
-  marketingInit(){this.podInit();ensureSchemaObjects(this.sql,MARKETING_SCHEMA);}
+  marketingInit(){this.podInit();ensureSchemaObjects(this.sql,MARKETING_SCHEMA);ensureSchemaObjects(this.sql,EXPERIMENT_SCHEMA);}
+  marketingRfm(cursor:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>marketingRfm(this.sql,cursor));}
+  marketingExperiment(raw:Parameters<typeof createExperiment>[1]){this.marketingInit();return this.ctx.storage.transactionSync(()=>createExperiment(this.sql,raw));}
+  marketingExperimentReport(){this.marketingInit();return this.ctx.storage.transactionSync(()=>experimentReport(this.sql));}
   marketingSubscribe(input:SubscriptionInput,policy:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>subscribeMarketing(this.sql,input,policy));}
   marketingConfirm(id:string,nonce:string,policy:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>confirmMarketing(this.sql,id,nonce,policy));}
   marketingUnsubscribe(id:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>unsubscribeMarketing(this.sql,id));}

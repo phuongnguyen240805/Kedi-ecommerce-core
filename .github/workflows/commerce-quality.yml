@@ -14,6 +14,8 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - run: npm ci --workspace merchant --include-workspace-root
+      - run: npm ci --workspace merchant --workspace client --include-workspace-root
       - run: npm run typecheck --workspace merchant
-      - run: npm run test:phase4 --workspace merchant
+      - run: npm run test:phase5 --workspace merchant
+      - run: npm run type-check --workspace client
+      - run: npm run test:commerce:ui --workspace client

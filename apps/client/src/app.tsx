@@ -1,3 +1,4 @@
+import MarketingPage from '@/pages/admin/marketing';
 /**
  * Copyright (c) 2024-2026 Ronan LE MEILLAT
  * License: AGPL-3.0-or-later
@@ -135,6 +136,7 @@ function App() {
           path="/admin/orders"
         />
         <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><CommerceServicePage /></AuthenticationGuardWithPermission>} path="/admin/commerce-service" />
+        <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><MarketingPage /></AuthenticationGuardWithPermission>} path="/admin/marketing" />
         <Route
           element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><WebhooksPage /></AuthenticationGuardWithPermission>}
           path="/admin/webhooks"

@@ -16,6 +16,7 @@ export async function deliverMarketing(env:Env,db:DOStub){
    }else{
     const titles={welcome:'Welcome to '+env.STORE_NAME,abandoned:'Your cart is waiting',post_purchase:'How was your order?',win_back:'Discover something new'};
     subject=titles[job.kind];text=job.kind==='abandoned'?'Your payment has not been confirmed. Review your cart at its current price before deciding to buy.':'Explore the latest from '+env.STORE_NAME+'.';
+    const copy=job.payload.copy;if(copy&&typeof copy==='object'&&'subject' in copy&&'text' in copy&&typeof copy.subject==='string'&&typeof copy.text==='string'){subject=copy.subject;text=copy.text;}
     if(job.kind==='abandoned'){
      const token=await marketingToken(env,'recovery',job.subscriber_id,{cart_id:job.payload.cart_id,checkout_id:job.payload.checkout_id});
      link=`${storefront.origin}/marketing-preferences#action=recovery&token=${encodeURIComponent(token)}`;
