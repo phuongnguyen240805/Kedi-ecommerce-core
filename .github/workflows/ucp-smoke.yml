@@ -1,0 +1,58 @@
+name: UCP production smoke
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/ucp-smoke.yml]
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --workspace merchant --include-workspace-root
+      - name: Probe UCP and collect only matching probe exceptions
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          npx wrangler tail merchant --format=json > "$RUNNER_TEMP/ucp-tail.json" 2> "$RUNNER_TEMP/ucp-tail-error.txt" &
+          tail_pid=$!
+          trap 'kill "$tail_pid" 2>/dev/null || true' EXIT
+          sleep 10
+          failed=0
+          for path in /.well-known/ucp /ucp/v1/products; do
+            status=$(curl --max-time 25 -s -o /dev/null -w '%{http_code}' "https://merchant.gofiber-phuongnguyen.workers.dev$path?deploy_probe=$GITHUB_RUN_ID")
+            echo "$path HTTP $status"
+            if [ "$status" != 200 ]; then failed=1; fi
+          done
+          sleep 10
+          kill "$tail_pid" 2>/dev/null || true
+          PROBE_LOG="$RUNNER_TEMP/ucp-tail.json" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          raw=Path(os.environ['PROBE_LOG']).read_text()
+          decoder=json.JSONDecoder()
+          while raw.strip():
+              raw=raw.lstrip()
+              try:
+                  event,end=decoder.raw_decode(raw)
+              except ValueError:
+                  break
+              raw=raw[end:]
+              if 'deploy_probe='+os.environ['GITHUB_RUN_ID'] not in str(event.get('event',{}).get('request',{}).get('url','')):
+                  continue
+              for exception in event.get('exceptions',[]):
+                  print('Probe exception:',exception.get('name'),exception.get('message'))
+              for log in event.get('logs',[]):
+                  if log.get('level')=='error':
+                      print('Probe error:',str(log.get('message',''))[:1500])
+          PY
+          exit "$failed"
