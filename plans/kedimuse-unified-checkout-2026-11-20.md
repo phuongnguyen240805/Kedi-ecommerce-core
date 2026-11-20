@@ -39,7 +39,7 @@ Stripe: tái dùng STRIPE_SECRET_KEY và STRIPE_WEBHOOK_SECRET hiện có. Chưa
 - Backend full regression: 187/187; gồm runtime Worker/DO, auth finance, 6 callback đối soát đồng thời, tồn kho, payment settlement, marketing.
 - Backend và admin typecheck xanh; Admin UI 8/8 trước các thay đổi đồng thời từ Printify.
 - Frontend 271/271 trong 59 suites, module boundaries/typecheck/lint và OpenNext build xanh.
-- Browser: Stripe review/redirect/status; QR selection/instructions/reload/mobile, không tự paid; handoff và các luồng cũ. Kết quả bộ browser cuối cập nhật ở mục phát hành.
+- Browser 9/9: Stripe review/redirect/status; QR selection/instructions/reload/mobile, không tự paid; handoff và các luồng cũ.
 - Deploy settings Python 2/2, generator 8/8, ACP request + 3 HTTP response schema xanh; manifest patch test 1/1.
 - RTK chỉ thu gọn log; lưu full log local, dùng exit code của lệnh gốc.
 
@@ -53,4 +53,15 @@ Stripe: tái dùng STRIPE_SECRET_KEY và STRIPE_WEBHOOK_SECRET hiện có. Chưa
 
 ## Phát hành
 
-Đang chờ kết quả CI/deploy và smoke cuối. Không xem test xanh là đã nghiệm thu giao dịch tiền thật.
+- Backend code: 6d1d150 → d225da8 → 148bb26, push main đúng Kedi-ecommerce-core. Bản cuối CI/Worker deploy thành công: https://github.com/phuongnguyen240805/Kedi-ecommerce-core/actions/runs/44744621241
+- Admin CI/Pages deploy thành công: https://github.com/phuongnguyen240805/Kedi-ecommerce-core/actions/runs/44743827437
+- FE: efd7be8, push main kedimuse-fe; CI thành công: https://github.com/phuongnguyen240805/kedimuse-fe/actions/runs/44743867384
+- FE live Worker printerval version 352855a6-ce03-495b-936a-6f769f11fd27; /commerce-checkout HTTP 200.
+- Chrome live viewport 390×844: không lỗi JavaScript, không tràn ngang; catalog chưa đủ cấu hình nên nút tạo đơn bị chặn.
+- Live backend status: enabled=true, stripe_configured=true (test-mode qua readiness), qr_configured=false, payments_paused=false, payment_methods_version=1.
+- Live catalog: 0 SKU đủ điều kiện; readiness 3 variant hiện chưa sẵn sàng. Không thêm giá/thuế/phí vận chuyển giả để mở bán.
+- Live finance API: không auth hoặc dùng storefront BFF token bị 401; webhook Stripe không ký bị 400; MCP 404, POD production tắt, marketing tắt.
+- Chưa nghiệm thu Stripe test payment thực sự, chuyển khoản ngân hàng hoặc đăng nhập staff thực tế. Các cấu hình và thử nghiệm này giữ pending theo yêu cầu bổ sung sau.
+- Không stage/commit các thay đổi Printify đang được chat khác thực hiện trong cùng workspace.
+
+Không xem test xanh là đã nghiệm thu giao dịch tiền thật.
