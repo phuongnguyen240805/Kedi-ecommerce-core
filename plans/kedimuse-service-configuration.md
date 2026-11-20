@@ -74,3 +74,9 @@ Pancake: shop được người dùng gửi 715160501 khác cấu hình local 71
 GHN: lấy thông tin kết nối từ tài khoản GHN chính thức/đầu mối hợp đồng; cấu hình đúng sandbox/production, token, shop ID và địa chỉ gửi. Trước khi bật vận đơn, nghiệm thu đồng bộ trạng thái, phí, COD và chống trùng bằng dữ liệu thử được phép. Secret của các provider không đưa vào FE hoặc chat.
 
 MCP, R2/POD và Printify được tách khỏi đợt này. Không tạo đơn nội địa cho đơn POD quốc tế.
+
+## 6. Shopping vật lý, tách khỏi MCP/POD
+
+Trang /shop-assistant tìm SKU từ catalog checkout vật lý active, còn tồn khả dụng, có trọng lượng và giá currency rõ ràng; không cần bật SHOPPING_ENABLED hoặc MCP. Bấm Review this product chỉ tạo draft, không thanh toán.
+
+AI tùy chọn dùng Secret SHOPPING_OPENAI_API_KEY và Variables SHOPPING_AI_MODEL, SHOPPING_AI_ENABLED. Để false khi chưa có key/model được tài khoản hỗ trợ. Frontend chỉ hiển thị checkbox khi backend xác nhận có cấu hình; checkbox mặc định không chọn. Chỉ gửi search text khi người dùng chọn AI và submit; không gửi địa chỉ/email hoặc cho AI ghi giá/tạo đơn. Budget hiện tại giới hạn 10 lần/client/giờ và 200 lần/store/ngày. Không tuyên bố AI live đã nghiệm thu khi chưa cấu hình.
