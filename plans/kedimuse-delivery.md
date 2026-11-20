@@ -8,7 +8,7 @@ Date: 2026-11-19. Changes are delivered in independently validated commits to ma
 | 1 | UCP/payment transaction correctness and regression gate | Implemented; local quality gate passed |
 | 2 | One POD provider, international checkout, durable fulfillment | Pilot implemented; live merchant/sample acceptance pending |
 | 3 | Subscriber/consent, email queue/automation and product feeds | Implemented; local gates passed; sender/feed account activation pending |
-| 4 | Shopping MCP, AI shopping and safe checkout handoff | Pilot implemented; frontend local gates passed and pushed; external connector activation pending |
+| 4 | Shopping MCP, AI shopping and safe checkout handoff | Paused by user on 2026-11-20; code retained; MCP deploy explicitly opt-in |
 | 5 | Marketing admin/RFM/A-B/AI, reconciliation and enabled OpenAI integration | Marketing admin implemented and under validation; bank automation/manual fallback and external OpenAI access remain conditional |
 
 ## Phase 1
@@ -48,3 +48,5 @@ Phase 5 local gates: 147 backend tests, 6 Admin UI tests, merchant/client TypeSc
 Deploy retry after configuring GitHub secrets: credential presence/encryption gate passed; shared artifact succeeded, then Cloudflare rejected the token at secret bulk with authentication codes 10000 and 9109. No successful deployment was observed. User was asked to replace the token value and verify its account scope. Deploy hardening removes the invalid sample KV ID (Wrangler provisions resources), excludes CI Cloudflare credentials from Worker secrets while preserving CRYPTOKEN required by existing encrypted AI config, skips empty optional secrets, enables nodejs_compat/observability and adds an account-bound read-only authorization preflight. Validation: 5 Python unit tests and actual Wrangler 4.90.1 deploy --dry-run passed; dry-run did not create resources.
 
 User requested UCP deployment without R2 for now. Default merchant deployment removes IMAGES and DIGITAL_ASSETS_BUCKET bindings; Durable Object/SQLite, KV and Stripe remain. This does not delete any existing bucket or object. POD uploads/digital assets require a later R2-enabled config and account activation. Previous attempt passed Cloudflare authentication, secret upload and quality checks but failed at R2 provisioning with code 10042.
+
+2026-11-20: User paused MCP and kept R2 deferred. Continued UCP HTTP validation, corrected tax/shipping schema queries, added inventory preflight and automated post-deploy HTTP smoke. Local gates: 151 backend tests, 6 Admin UI tests, 7 deployment config tests, merchant/client typechecks. See kedimuse-progress-2026-11-20.md for exact delivered scope and remaining integration requirements.

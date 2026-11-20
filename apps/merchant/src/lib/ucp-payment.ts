@@ -79,6 +79,12 @@ export function beginUcpPayment(sql: ShippingSql, sessionId: string, successUrl:
  if (session.status !== 'ready_for_complete' || Date.parse(String(session.expires_at)) <= now ||
      !Number.isFinite(Date.parse(String(session.expires_at)))) fail('checkout_not_ready', 'Checkout is not ready or has expired.');
  const snapshot = paymentSnapshot(session);
+ for(const item of snapshot.items){
+  if(item.fulfillment_mode!=='stock')continue;
+  const [inventory]=sql.exec('SELECT on_hand,reserved FROM inventory WHERE sku=?',item.item.id).toArray();
+  if(!inventory||Number(inventory.on_hand)-Number(inventory.reserved)<item.quantity)
+   fail('checkout_inventory_changed','Stock changed before payment; refresh the checkout.');
+ }
  const line_items: NonNullable<Stripe.Checkout.SessionCreateParams['line_items']> = snapshot.items.map(i => ({
   price_data: { currency: snapshot.currency.toLowerCase(), unit_amount: i.unit_price.amount,
    product_data: { name: i.item.title || i.item.id } }, quantity: i.quantity,

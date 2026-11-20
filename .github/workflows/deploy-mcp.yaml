@@ -39,6 +39,7 @@ permissions:
 
 jobs:
   create-env:
+    if: vars.MCP_DEPLOY_ENABLED == 'true'
     uses: ./.github/workflows/create-env-artifact.yaml
     secrets: inherit
 

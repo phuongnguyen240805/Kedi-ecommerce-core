@@ -149,6 +149,11 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/merchant
 
+      - name: Verify deployed UCP discovery and catalog
+        run: |
+          curl --fail --silent --show-error --max-time 30 'https://merchant.gofiber-phuongnguyen.workers.dev/.well-known/ucp?deployment_probe=${{ github.sha }}' -o /dev/null
+          curl --fail --silent --show-error --max-time 30 'https://merchant.gofiber-phuongnguyen.workers.dev/ucp/v1/products?deployment_probe=${{ github.sha }}' -o /dev/null
+
       - name: Upload ai.json.enc to KV_CACHE
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

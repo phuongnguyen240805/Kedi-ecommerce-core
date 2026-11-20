@@ -33,7 +33,7 @@ export const UCPEnvelopeSchema = z.object({
 export const UCPLineItemSchema = z.object({
   id: z.string().uuid(),
   item: z.object({
-    id: z.string().openapi({ example: 'SKU-001' }),
+    id: z.string().min(1).max(200).openapi({ example: 'SKU-001' }),
     title: z.string().optional(),
     description: z.string().optional(),
     image_url: z.string().optional(),
@@ -127,32 +127,32 @@ export const UCPShippingOptionSchema = z.object({
 
 export const UCPLineItemRequestSchema = z.object({
   item: z.object({
-    id: z.string().openapi({ example: 'SKU-001' }),
+    id: z.string().min(1).max(200).openapi({ example: 'SKU-001' }),
   }),
-  quantity: z.number().int().min(1).openapi({ example: 1 }),
+  quantity: z.number().int().min(1).max(99).openapi({ example: 1 }),
 });
 
 export const CreateCheckoutBodySchema = z.object({
-  line_items: z.array(UCPLineItemRequestSchema).min(1),
+  line_items: z.array(UCPLineItemRequestSchema).min(1).max(100),
   buyer: UCPBuyerSchema.optional(),
-  currency: z.string().min(3).max(3).openapi({ example: 'EUR' }),
+  currency: z.string().regex(/^[A-Za-z]{3}$/).transform(v=>v.toUpperCase()).openapi({ example: 'EUR' }),
   payment: z.record(z.string(), z.unknown()).optional(),
-});
+}).strict();
 
 export const UpdateCheckoutBodySchema = z.object({
-  line_items: z.array(UCPLineItemRequestSchema).min(1),
+  line_items: z.array(UCPLineItemRequestSchema).min(1).max(100),
   buyer: UCPBuyerSchema.optional(),
-  currency: z.string().optional().openapi({ example: 'EUR' }),
+  currency: z.string().regex(/^[A-Za-z]{3}$/).transform(v=>v.toUpperCase()).optional().openapi({ example: 'EUR' }),
   payment: z.record(z.string(), z.unknown()).optional(),
-});
+}).strict();
 
 export const PatchCheckoutBodySchema = z.object({
   buyer: UCPBuyerSchema.optional(),
   line_items: z.array(z.object({
     id: z.string().uuid(),
-    quantity: z.number().int().min(1),
-  })).optional(),
-});
+    quantity: z.number().int().min(1).max(99),
+  })).max(100).optional(),
+}).strict();
 
 export const CompleteCheckoutBodySchema = z.object({
   payment_data: z.object({
@@ -164,7 +164,7 @@ export const CompleteCheckoutBodySchema = z.object({
 });
 
 export const EstimateShippingBodySchema = z.object({
-  country_code: z.string().min(2).max(2).openapi({ example: 'FR' }),
+  country_code: z.string().regex(/^[A-Za-z]{2}$/).transform(v=>v.toUpperCase()).openapi({ example: 'FR' }),
 });
 
 // ============================================================

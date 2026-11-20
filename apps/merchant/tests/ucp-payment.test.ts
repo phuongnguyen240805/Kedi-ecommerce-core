@@ -89,3 +89,7 @@ test('another store database cannot settle a foreign payment, and return URL rej
  assert.throws(()=>checkoutReturnUrl('https://evil.test','https://shop.test/ok',['https://shop.test']));
  assert.throws(()=>checkoutReturnUrl('https://user:pass@shop.test','https://shop.test/ok',['https://shop.test']));
 });
+
+test('inventory lost since quote blocks a new Stripe attempt before I/O and leaves the checkout editable',()=>{
+ const f=fixture();f.db.exec("UPDATE inventory SET reserved=9 WHERE sku='shirt'");assert.throws(()=>f.start(),/Stock changed/);assert.equal(f.db.prepare('SELECT COUNT(*) n FROM ucp_payment_attempts').get()!.n,0);assert.equal(f.db.prepare('SELECT status FROM ucp_checkout_sessions').get()!.status,'ready_for_complete');assert.equal(f.db.prepare('SELECT COUNT(*) n FROM orders').get()!.n,0);
+});

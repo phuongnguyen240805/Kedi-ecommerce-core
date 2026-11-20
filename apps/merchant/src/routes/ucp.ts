@@ -1,3 +1,4 @@
+import {bodyLimit} from 'hono/body-limit';
 import { storeApiBase } from '../lib/stores';
 import { startStripeCheckout } from '../lib/ucp-payment-service';
 /**
@@ -51,7 +52,7 @@ import {
 // UCP - UNIVERSAL COMMERCE PROTOCOL
 // ============================================================
 //
-// Full UCP implementation for agent-to-commerce interoperability.
+// Legacy UCP adapter pinned to the declared protocol version; conformance upgrades are tracked separately.
 // See: https://ucp.dev/specification/overview
 //
 // Capabilities implemented:
@@ -64,6 +65,7 @@ import {
 const UCP_VERSION = '2026-01-11';
 
 export const ucp = new OpenAPIHono<HonoEnv>();
+ucp.use("*",bodyLimit({maxSize:64000}));
 
 // ============================================================
 // TYPES
@@ -212,23 +214,14 @@ interface TaxResult {
  * Returns { taxAmount: 0 } if no default region or tax rate configured.
  */
 async function computeTax(db: Database, subtotal: number): Promise<TaxResult> {
-  const [defaultTax] = await db.query<{ rate: number; name: string }>(
-    `SELECT tr.rate, tr.name
-     FROM tax_rates tr
-     JOIN regions r ON r.id = tr.region_id
-     WHERE r.is_default = 1
-     LIMIT 1`,
-    []
-  );
-  if (!defaultTax || defaultTax.rate === 0) {
-    return { taxAmount: 0, taxRate: 0, taxLabel: '' };
-  }
-  const taxAmount = Math.round(subtotal * (defaultTax.rate / 100));
-  return {
-    taxAmount,
-    taxRate: defaultTax.rate,
-    taxLabel: defaultTax.name || `TVA ${defaultTax.rate}%`,
-  };
+  const rates=await db.query<{rate_percentage:number;display_name:string;country_code:string|null;tax_code:string|null}>("SELECT rate_percentage,display_name,country_code,tax_code FROM tax_rates WHERE status='active'",[]);
+  const [region]=await db.query<{tax_inclusive:number}>("SELECT tax_inclusive FROM regions WHERE is_default=1",[]);
+  // This legacy UCP adapter lacks destination/tax-code inputs. Do not guess a tax jurisdiction.
+  if(rates.length>1||rates.some(rate=>rate.country_code||rate.tax_code)||(rates.length&&region?.tax_inclusive===1))
+    throw ApiError.invalidRequest('This tax policy requires merchant checkout with destination and item tax context');
+  const rate=rates[0];if(!rate)return {taxAmount:0,taxRate:0,taxLabel:''};
+  if(!Number.isFinite(rate.rate_percentage)||rate.rate_percentage<0||rate.rate_percentage>100)throw ApiError.invalidRequest('Invalid tax configuration');
+  return {taxAmount:Math.round(subtotal*rate.rate_percentage/100),taxRate:rate.rate_percentage,taxLabel:rate.display_name};
 }
 
 // ============================================================
@@ -384,6 +377,7 @@ ucp.openapi(routePostCheckoutSession, async (c) => {
   const resolvedItems: UCPLineItem[] = [];
   const messages: UCPMessage[] = [];
   let subtotal = 0;
+  const seenSkus=new Set<string>();
 
   // Resolve currency_id from ISO code
   const currencyId = await getCurrencyIdFromCode(db, currency);
@@ -410,7 +404,7 @@ ucp.openapi(routePostCheckoutSession, async (c) => {
       `SELECT v.*, p.title as product_title, p.description as product_description
        FROM variants v
        JOIN products p ON v.product_id = p.id
-       WHERE v.id = ? OR v.sku = ?`,
+       WHERE (v.id = ? OR v.sku = ?) AND v.status='active' AND p.status='active'`,
       [itemId, itemId]
     );
     
@@ -454,8 +448,12 @@ ucp.openapi(routePostCheckoutSession, async (c) => {
       continue;
     }
 
+    if(seenSkus.has(variant.sku))throw ApiError.invalidRequest('Duplicate variant; combine quantities in one line');
+    seenSkus.add(variant.sku);
+    if(!Number.isSafeInteger(unitPrice)||unitPrice<=0||unitPrice>1_000_000_000)throw ApiError.invalidRequest('Invalid configured price');
     const totalPrice = unitPrice * quantity;
     subtotal += totalPrice;
+    if(!Number.isSafeInteger(subtotal)||subtotal>1_000_000_000)throw ApiError.invalidRequest('Checkout amount exceeds supported limit');
     
     resolvedItems.push({
       id: uuid(),
@@ -481,7 +479,7 @@ ucp.openapi(routePostCheckoutSession, async (c) => {
   let status: UCPCheckoutSession['status'] = 'incomplete';
   if (!hasErrors && resolvedItems.length > 0) {
     // Check if we have enough info to be ready
-    status = 'ready_for_complete';
+    status = buyer?.email ? 'ready_for_complete' : 'incomplete';
   }
   if (hasBuyerRequiredErrors) {
     status = 'requires_escalation';
@@ -664,6 +662,7 @@ ucp.openapi(routePutCheckoutSession, async (c) => {
     throw ApiError.invalidRequest(`Cannot update ${session.status} checkout session`);
   }
   
+  if(Date.parse(session.expires_at)<=Date.now())throw ApiError.invalidRequest('Checkout has expired');
   const { line_items, buyer, currency, payment } = body;
   
   // Determine the effective currency for this update.
@@ -680,6 +679,7 @@ ucp.openapi(routePutCheckoutSession, async (c) => {
   const resolvedItems: UCPLineItem[] = [];
   const messages: UCPMessage[] = [];
   let subtotal = 0;
+  const seenSkus=new Set<string>();
   
   for (const item of line_items || []) {
     const itemId = item.item?.id;
@@ -691,7 +691,7 @@ ucp.openapi(routePutCheckoutSession, async (c) => {
       `SELECT v.*, p.title as product_title, p.description as product_description
        FROM variants v
        JOIN products p ON v.product_id = p.id
-       WHERE v.id = ? OR v.sku = ?`,
+       WHERE (v.id = ? OR v.sku = ?) AND v.status='active' AND p.status='active'`,
       [itemId, itemId]
     );
     
@@ -705,6 +705,8 @@ ucp.openapi(routePutCheckoutSession, async (c) => {
       continue;
     }
 
+    const [inventory]=await db.query<{on_hand:number;reserved:number}>('SELECT on_hand,reserved FROM inventory WHERE sku=?',[variant.sku]);
+    if(!inventory||inventory.on_hand-inventory.reserved<quantity)messages.push({type:'error',code:'insufficient_inventory',content:'Requested quantity is unavailable',severity:'recoverable'});
     // Resolve price via variant_prices for the active currency
     let unitPrice: number;
     try {
@@ -719,8 +721,12 @@ ucp.openapi(routePutCheckoutSession, async (c) => {
       continue;
     }
 
+    if(seenSkus.has(variant.sku))throw ApiError.invalidRequest('Duplicate variant; combine quantities in one line');
+    seenSkus.add(variant.sku);
+    if(!Number.isSafeInteger(unitPrice)||unitPrice<=0||unitPrice>1_000_000_000)throw ApiError.invalidRequest('Invalid configured price');
     const totalPrice = unitPrice * quantity;
     subtotal += totalPrice;
+    if(!Number.isSafeInteger(subtotal)||subtotal>1_000_000_000)throw ApiError.invalidRequest('Checkout amount exceeds supported limit');
     
     resolvedItems.push({
       id: uuid(),
@@ -739,7 +745,7 @@ ucp.openapi(routePutCheckoutSession, async (c) => {
   const hasErrors = messages.some(m => m.type === 'error');
   let status: UCPCheckoutSession['status'] = 'incomplete';
   if (!hasErrors && resolvedItems.length > 0) {
-    status = 'ready_for_complete';
+    status = buyer?.email ? 'ready_for_complete' : 'incomplete';
   }
   
   const { taxAmount: updatedTaxAmount, taxLabel: updatedTaxLabel } = await computeTax(db, subtotal);
@@ -805,7 +811,7 @@ const routePostComplete = createRoute({
   path: '/ucp/v1/checkout-sessions/{id}/complete',
   tags: ['UCP'],
   summary: 'Complete checkout session',
-  description: 'Initiates payment via the specified handler. Returns requires_escalation with a redirect URL if Stripe is used, or a graceful fallback if no handler is available.',
+  description: 'Initiates configured Stripe payment and returns a provider redirect. If no handler is configured, returns service unavailable without changing checkout state.',
   request: {
     params: SessionIdParamSchema,
     body: { content: { 'application/json': { schema: CompleteCheckoutBodySchema } } },
@@ -844,6 +850,7 @@ ucp.openapi(routePostComplete, async (c) => {
     throw ApiError.invalidRequest(`Cannot complete checkout in ${session.status} state`);
   }
   
+  if(session.status!=='complete_in_progress'&&Date.parse(session.expires_at)<=Date.now())throw ApiError.invalidRequest('Checkout has expired');
   const lineItems = JSON.parse(session.line_items || '[]');
   const buyer = JSON.parse(session.buyer || '{}');
   const totals = JSON.parse(session.totals || '[]');
@@ -888,35 +895,7 @@ ucp.openapi(routePostComplete, async (c) => {
     });
   }
   
-  // No valid payment handler — graceful escalation to web checkout
-  if (session.status === 'complete_in_progress') throw ApiError.invalidRequest('Payment is already in progress');
-  const continueUrl = `${baseUrl}/checkout/${sessionId}`;
-  await db.run(
-    `UPDATE ucp_checkout_sessions SET status = 'requires_escalation', updated_at = ? WHERE id = ? AND status='ready_for_complete'`,
-    [now(), sessionId]
-  );
-  return c.json({
-    ucp: ucpEnvelope(activeCapabilities()),
-    id: sessionId,
-    status: 'requires_escalation' as const,
-    currency: session.currency,
-    line_items: lineItems,
-    buyer: buyer || undefined,
-    totals,
-    messages: [{
-      type: 'warning' as const,
-      code: 'no_payment_handler',
-      content: 'No automated payment handler available. Please complete via web checkout.',
-      severity: 'requires_buyer_review',
-    }],
-    links: [
-      { rel: 'privacy_policy', href: `${baseUrl}/privacy`, title: 'Privacy Policy' },
-      { rel: 'terms_of_service', href: `${baseUrl}/terms`, title: 'Terms of Service' },
-    ],
-    payment: { handlers: [] },
-    continue_url: continueUrl,
-    expires_at: session.expires_at,
-  });
+  throw ApiError.serviceUnavailable('No configured checkout handler; contact the merchant');
 });
 
 // DELETE /ucp/v1/checkout-sessions/:id - Cancel Checkout
@@ -1007,54 +986,24 @@ ucp.openapi(routePatchCheckoutSession, async (c) => {
     throw ApiError.invalidRequest(`Cannot update ${session.status} session`);
   }
 
-  const updates: Record<string, string> = {};
-  const values: unknown[] = [];
-
-  if (body.buyer !== undefined) {
-    const currentBuyer = JSON.parse(session.buyer || 'null') || {};
-    const mergedBuyer  = { ...currentBuyer, ...body.buyer };
-    updates['buyer']   = '?';
-    values.push(JSON.stringify(mergedBuyer));
+  if(Date.parse(session.expires_at)<=Date.now())throw ApiError.invalidRequest('Checkout has expired');
+  if(body.buyer===undefined&&body.line_items===undefined)throw ApiError.invalidRequest('No fields to update');
+  const currentItems:UCPLineItem[]=JSON.parse(session.line_items||'[]');
+  const patches=body.line_items||[];
+  if(new Set(patches.map(p=>p.id)).size!==patches.length||patches.some(p=>!currentItems.some(i=>i.id===p.id)))throw ApiError.invalidRequest('Unknown or duplicate line item');
+  const items=currentItems.map(item=>{const qty=patches.find(p=>p.id===item.id)?.quantity??item.quantity;return {...item,quantity:qty,total_price:{...item.unit_price,amount:item.unit_price.amount*qty}};});
+  for(const item of items){
+    const [available]=await db.query<{on_hand:number;reserved:number}>("SELECT i.on_hand,i.reserved FROM variants v JOIN products p ON p.id=v.product_id JOIN inventory i ON i.sku=v.sku WHERE v.sku=? AND v.status='active' AND p.status='active'",[item.item.id]);
+    if(!available||available.on_hand-available.reserved<item.quantity)throw ApiError.invalidRequest('Requested product or quantity is unavailable');
   }
-
-  if (body.line_items !== undefined) {
-    const lineItemsToUpdate = body.line_items;
-    const currentItems: UCPLineItem[] = JSON.parse(session.line_items || '[]');
-    const patchedItems = currentItems.map((item: UCPLineItem) => {
-      const patch = lineItemsToUpdate.find((li) => li.id === item.id);
-      if (!patch) return item;
-      const qty = patch.quantity;
-      return {
-        ...item,
-        quantity: qty,
-        total_price: { ...item.unit_price, amount: item.unit_price.amount * qty },
-      };
-    });
-    const newSubtotal = patchedItems.reduce((s: number, i: UCPLineItem) => s + i.total_price.amount, 0);
-    const { taxAmount, taxLabel } = await computeTax(db, newSubtotal);
-    const newGrandTotal = newSubtotal + taxAmount;
-    const newTotals: UCPTotal[] = [
-      { type: 'subtotal', amount: newSubtotal, currency: session.currency },
-      ...(taxAmount > 0 ? [{ type: 'tax' as const, amount: taxAmount, currency: session.currency, label: taxLabel }] : []),
-      { type: 'grand_total', amount: newGrandTotal, currency: session.currency },
-    ];
-    updates['line_items'] = '?';
-    values.push(JSON.stringify(patchedItems));
-    updates['totals'] = '?';
-    values.push(JSON.stringify(newTotals));
-  }
-
-  if (Object.keys(updates).length === 0) {
-    return c.json({ message: 'No fields to update' }, 400);
-  }
-
-  updates['updated_at'] = '?';
-  values.push(now(), sessionId);
-
-  const setClauses = Object.keys(updates).map(k => `${k} = ?`).join(', ');
-  await db.run(`UPDATE ucp_checkout_sessions SET ${setClauses} WHERE id = ? AND status NOT IN ('completed','canceled','complete_in_progress')`, values);
-
-  return c.redirect(`/ucp/v1/checkout-sessions/${sessionId}`, 303);
+  const subtotal=items.reduce((sum,item)=>sum+item.total_price.amount,0);if(!Number.isSafeInteger(subtotal)||subtotal>1_000_000_000)throw ApiError.invalidRequest('Checkout amount exceeds supported limit');
+  const {taxAmount,taxLabel}=await computeTax(db,subtotal);
+  const oldTotals:UCPTotal[]=JSON.parse(session.totals||'[]'),shipping=oldTotals.find(t=>t.type==='shipping')?.amount||0;
+  const totals:UCPTotal[]=[{type:'subtotal',amount:subtotal,currency:session.currency},...(taxAmount?[{type:'tax' as const,amount:taxAmount,currency:session.currency,label:taxLabel}]:[]),...(shipping?[{type:'shipping' as const,amount:shipping,currency:session.currency}]:[]),{type:'grand_total',amount:subtotal+taxAmount+shipping,currency:session.currency}];
+  const buyer={...(JSON.parse(session.buyer||'null')||{}),...body.buyer};
+  const changed=await db.run("UPDATE ucp_checkout_sessions SET status=?,buyer=?,line_items=?,totals=?,messages='[]',updated_at=? WHERE id=? AND status NOT IN ('completed','canceled','complete_in_progress') AND line_items=? AND buyer IS ?",[buyer.email&&items.length?'ready_for_complete':'incomplete',JSON.stringify(buyer),JSON.stringify(items),JSON.stringify(totals),now(),sessionId,session.line_items,session.buyer]);
+  if(!changed.changes)throw ApiError.invalidRequest('Checkout changed while updating');
+  return c.redirect(storeApiBase(c.req.url,c.env)+'/ucp/v1/checkout-sessions/'+sessionId,303);
 });
 
 // ============================================================
@@ -1248,27 +1197,20 @@ ucp.openapi(routePostEstimateShipping, async (c) => {
 
   const db = getDb(c.var.db);
 
-  const [session] = await db.query<{ id: string; currency: string; status: string }>(
-    `SELECT id, currency, status FROM ucp_checkout_sessions WHERE id = ?`,
-    [sessionId]
-  );
-  if (!session) throw ApiError.notFound('Checkout session not found');
-  if (['completed', 'canceled', 'complete_in_progress'].includes(session.status)) {
-    throw ApiError.invalidRequest(`Cannot estimate shipping for ${session.status} session`);
+  const [session]=await db.query<{id:string;currency:string;status:string;expires_at:string;line_items:string}>("SELECT id,currency,status,expires_at,line_items FROM ucp_checkout_sessions WHERE id=?",[sessionId]);
+  if(!session)throw ApiError.notFound('Checkout session not found');
+  if(['completed','canceled','complete_in_progress'].includes(session.status)||Date.parse(session.expires_at)<=Date.now())throw ApiError.invalidRequest('Checkout cannot be quoted in this state');
+  let weight=0,physical=false;
+  for(const item of JSON.parse(session.line_items||'[]') as UCPLineItem[]){
+    const [variant]=await db.query<{weight_g:number;requires_shipping:number;shipping_class_id:string|null}>("SELECT v.weight_g,v.requires_shipping,COALESCE(v.shipping_class_id,p.shipping_class_id) shipping_class_id FROM variants v JOIN products p ON p.id=v.product_id WHERE v.sku=? AND v.status='active' AND p.status='active'",[item.item.id]);
+    if(!variant)throw ApiError.invalidRequest('Product is unavailable');
+    if(variant.requires_shipping===0)continue;
+    if(variant.shipping_class_id||!Number.isFinite(variant.weight_g)||variant.weight_g<=0)throw ApiError.invalidRequest('Shipping requires merchant checkout with product shipping context');
+    physical=true;weight+=variant.weight_g*item.quantity;
   }
-
-  const rates = await db.query<{
-    id: string; name: string | null; price_cents: number; estimated_days: number | null;
-  }>(
-    `SELECT sr.id, sr.name, sr.price_cents, sr.estimated_days
-     FROM shipping_rates sr
-     JOIN regions r ON r.id = sr.region_id
-     JOIN region_countries rc ON rc.region_id = r.id
-     JOIN countries c ON c.id = rc.country_id
-     WHERE c.iso_code = ? AND sr.status = 'active'
-     ORDER BY sr.price_cents ASC`,
-    [countryCode.toUpperCase()]
-  );
+  const rates=physical?await db.query<{id:string;name:string;price_cents:number;estimated_days:number|null}>(
+    "SELECT DISTINCT sr.id,sr.display_name name,sp.amount_cents price_cents,sr.max_delivery_days estimated_days FROM shipping_rates sr JOIN region_shipping_rates rs ON rs.shipping_rate_id=sr.id JOIN regions r ON r.id=rs.region_id JOIN region_countries rc ON rc.region_id=r.id JOIN countries c ON c.id=rc.country_id JOIN currencies cur ON cur.id=r.currency_id JOIN shipping_rate_prices sp ON sp.shipping_rate_id=sr.id AND sp.currency_id=cur.id WHERE c.code=? AND c.status='active' AND r.status='active' AND cur.status='active' AND cur.code=? AND sr.status='active' AND sr.shipping_class_id IS NULL AND (sr.max_weight_g IS NULL OR sr.max_weight_g>=?) AND sp.amount_cents>=0 ORDER BY sp.amount_cents,sr.id",
+    [countryCode.toUpperCase(),session.currency,weight]):[];
 
   return c.json({
     ucp: ucpEnvelope([{ name: 'dev.ucp.shopping.checkout', version: UCP_VERSION }]),

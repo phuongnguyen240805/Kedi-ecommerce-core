@@ -1,0 +1,56 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,writeFileSync,mkdirSync,rmSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import {join} from 'node:path';
+import {unstable_dev} from 'wrangler';
+test('UCP HTTP lifecycle uses real prices/tax schema and rejects invalid checkout transitions without payment I/O',{timeout:90000},async()=>{
+ const root=fileURLToPath(new URL('../.wrangler/',import.meta.url));mkdirSync(root,{recursive:true});const dir=mkdtempSync(join(root,'ucp-http-'));
+ const source=fileURLToPath(new URL('../src/index.ts',import.meta.url)).replaceAll('\\','/'),main=join(dir,'worker.ts'),config=join(dir,'wrangler.json');
+ writeFileSync(main,`
+ import original,{MerchantDO} from ${JSON.stringify(source)};export {MerchantDO};
+ export default {async fetch(req,env,ctx){const path=new URL(req.url).pathname;if(!path.startsWith('/__test/'))return original.fetch(req,env,ctx);const db=env.MERCHANT.getByName('default');
+ if(path==='/__test/sql'){const {query,params}=await req.json();return Response.json(await db.run(query,params));}
+ await db.run("INSERT INTO currencies(id,code,display_name,decimal_places) VALUES('usd','USD','Dollar',2)");
+ await db.run("INSERT INTO products(id,title,status) VALUES('product','Shirt','active'),('draft','Hidden','draft')");
+ await db.run("INSERT INTO variants(id,product_id,sku,title,price_cents,currency) VALUES('variant','product','SHIRT','Shirt',2500,'USD'),('hidden','draft','HIDDEN','Hidden',100,'USD')");
+ await db.run("INSERT INTO variant_prices(id,variant_id,currency_id,price_cents) VALUES('price','variant','usd',2500),('hidden-price','hidden','usd',100)");
+ await db.run("INSERT INTO inventory(id,sku,on_hand,reserved) VALUES('inventory','SHIRT',10,2),('hidden-i','HIDDEN',100,0)");
+ await db.run("INSERT INTO tax_rates(id,display_name,rate_percentage) VALUES('tax','Test tax',10)");return Response.json({seeded:true});
+ }};`);
+ writeFileSync(config,JSON.stringify({name:'ucp-http-test',main,compatibility_date:'2025-12-01',compatibility_flags:['nodejs_compat'],kv_namespaces:[{binding:'KV_CACHE',id:'0'.repeat(32)}],durable_objects:{bindings:[{name:'MERCHANT',class_name:'MerchantDO'}]},migrations:[{tag:'v1',new_sqlite_classes:['MerchantDO']}]}));
+ let worker:Awaited<ReturnType<typeof unstable_dev>>|undefined;
+ try{worker=await unstable_dev(main,{config,local:true,persist:false,port:0,inspectorPort:0,logLevel:'error',experimental:{disableExperimentalWarning:true}});
+ const request=(path:string,body?:unknown,method='POST')=>worker!.fetch('http://localhost'+path,{method,redirect:'manual',headers:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});
+ assert.equal((await request('/__test/seed')).status,200);
+ const sql=async(query:string,params:unknown[]=[])=>{assert.equal((await request('/__test/sql',{query,params})).status,200);};
+ const input={currency:'usd',line_items:[{item:{id:'SHIRT'},quantity:2}],buyer:{email:'buyer@example.test'}};
+ let response=await request('/ucp/v1/checkout-sessions',input);assert.equal(response.status,201);let session=await response.json() as any;
+ assert.equal(session.currency,'USD');assert.equal(session.status,'ready_for_complete');assert.equal(session.totals.find((t:any)=>t.type==='tax').amount,500);assert.equal(session.totals.find((t:any)=>t.type==='grand_total').amount,5500);
+ const path='/ucp/v1/checkout-sessions/'+session.id;
+ for(const body of [{...input,price:1},{...input,currency:'1!?'},{...input,line_items:[{item:{id:'SHIRT'},quantity:100}]},{...input,line_items:[...input.line_items,{item:{id:'variant'},quantity:1}]}])assert.equal((await request('/ucp/v1/checkout-sessions',body)).status,400);
+ response=await request('/ucp/v1/checkout-sessions',{...input,line_items:[{item:{id:'HIDDEN'},quantity:1}]});assert.equal(response.status,201);assert.equal((await response.json() as any).status,'incomplete');
+ response=await request(path,{...input,line_items:[{item:{id:'SHIRT'},quantity:9}]},'PUT');assert.equal(response.status,200);assert.equal((await response.json() as any).status,'incomplete');
+ response=await request(path,input,'PUT');assert.equal(response.status,200);session=await response.json();const line=session.line_items[0].id;
+ assert.equal((await request(path,{line_items:[{id:line,quantity:9}]},'PATCH')).status,400);
+ assert.equal((await request(path,{line_items:[{id:crypto.randomUUID(),quantity:1}]},'PATCH')).status,400);
+ assert.equal((await request(path,{line_items:[{id:line,quantity:1},{id:line,quantity:2}]},'PATCH')).status,400);
+ assert.equal((await request(path,{line_items:[{id:line,quantity:3}]},'PATCH')).status,303);
+ session=await (await request(path,undefined,'GET')).json();assert.equal(session.totals.find((t:any)=>t.type==='grand_total').amount,8250);
+ await sql("UPDATE variants SET weight_g=500 WHERE sku='SHIRT'");
+ await sql("INSERT INTO countries(id,code,display_name,country_name) VALUES('us','US','United States','United States')");
+ await sql("INSERT INTO regions(id,display_name,currency_id) VALUES('region','US','usd')");
+ await sql("INSERT INTO region_countries VALUES('region','us')");
+ await sql("INSERT INTO shipping_rates(id,display_name,max_weight_g,max_delivery_days) VALUES('shipping','Standard',2000,5)");
+ await sql("INSERT INTO region_shipping_rates VALUES('region','shipping')");
+ await sql("INSERT INTO shipping_rate_prices(id,shipping_rate_id,currency_id,amount_cents) VALUES('ship-price','shipping','usd',700)");
+ let shipping=await request(path+'/estimate-shipping',{country_code:'us'});assert.equal(shipping.status,200);let options=await shipping.json() as any;assert.equal(options.shipping_options[0].price_cents,700);assert.equal(options.shipping_options[0].currency,'USD');
+ shipping=await request(path+'/estimate-shipping',{country_code:'VN'});assert.equal((await shipping.json() as any).shipping_options.length,0);
+ await sql("UPDATE shipping_rates SET max_weight_g=1000 WHERE id='shipping'");shipping=await request(path+'/estimate-shipping',{country_code:'US'});assert.equal((await shipping.json() as any).shipping_options.length,0);
+ assert.equal((await request(path+'/complete',{})).status,503);session=await (await request(path,undefined,'GET')).json();assert.equal(session.status,'ready_for_complete');
+ await sql("UPDATE tax_rates SET country_code='US' WHERE id='tax'");assert.equal((await request('/ucp/v1/checkout-sessions',input)).status,400);await sql("UPDATE tax_rates SET country_code=NULL WHERE id='tax'");
+ await sql("UPDATE ucp_checkout_sessions SET expires_at='2000-01-01T00:00:00Z' WHERE id=?",[session.id]);assert.equal((await request(path,input,'PUT')).status,400);assert.equal((await request(path,{buyer:{email:'other@test.com'}},'PATCH')).status,400);assert.equal((await request(path+'/complete',{})).status,400);
+ await sql("UPDATE ucp_checkout_sessions SET expires_at=? WHERE id=?",[new Date(Date.now()+3600000).toISOString(),session.id]);assert.equal((await request(path,undefined,'DELETE')).status,200);assert.equal((await request(path,input,'PUT')).status,400);
+ response=await request('/ucp/v1/checkout-sessions',{currency:'USD',line_items:input.line_items});session=await response.json();assert.equal(session.status,'incomplete');assert.equal((await request('/ucp/v1/checkout-sessions/'+session.id,{buyer:input.buyer},'PATCH')).status,303);
+ }finally{await worker?.stop();rmSync(dir,{recursive:true,force:true});}
+});
