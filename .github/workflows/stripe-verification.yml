@@ -1,0 +1,22 @@
+name: Stripe read-only verification
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - scripts/verify-stripe-config.py
+      - scripts/test_stripe_config.py
+      - .github/workflows/stripe-verification.yml
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s scripts -p test_stripe_config.py
+      - name: Verify Stripe API authentication and configured webhook events without payments
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+        run: python3 scripts/verify-stripe-config.py
