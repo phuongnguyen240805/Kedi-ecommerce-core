@@ -455,6 +455,7 @@ export function recordEvidence(
       );
     return receipt(sql, id);
   }
+  if(kind==='bank_transfer'&&sql.exec("SELECT name FROM sqlite_master WHERE name='checkout_bank_evidence'").toArray().length&&sql.exec('SELECT transaction_id FROM checkout_bank_evidence WHERE transaction_id=?',input.transaction_id).toArray().length)fail('transaction_conflict','Bank transaction already belongs to a shared checkout.');
   if (Date.parse(input.received_at) > now + 60_000)
     fail('invalid_received_at', 'Thời gian nhận tiền không hợp lệ.', 400);
   if (

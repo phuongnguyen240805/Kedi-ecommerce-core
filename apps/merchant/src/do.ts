@@ -1,3 +1,4 @@
+import {beginBankPayment,verifyBankPayment,closeBankPayment} from './lib/checkout-payments';
 import {recoverCheckoutMarketing} from './lib/checkout-marketing';
 import {checkoutReadiness} from './lib/checkout-readiness';
 import {ShippingError} from './lib/smart-shipping';
@@ -1422,6 +1423,9 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
      default:throw new ShippingError('unsupported_checkout_operation',400,'Unsupported checkout operation');
     }return {ok:true,value};}catch(error){if(error instanceof ShippingError)return {ok:false,error:{code:error.code,status:error.status,message:error.message}};if(error instanceof Error&&error.name==='ZodError')return {ok:false,error:{code:'invalid_input',status:400,message:'Invalid checkout input'}};throw error;}
   }
+  checkoutBankBegin(id:string,expected:{version:number;total:number},bank:{account_number:string;account_name:string}){this.checkoutInit();return this.ctx.storage.transactionSync(()=>beginBankPayment(this.sql,id,expected,bank));}
+  checkoutBankVerify(id:string,input:Parameters<typeof verifyBankPayment>[2],actor:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>verifyBankPayment(this.sql,id,input,actor));}
+  checkoutBankClose(id:string,actor:string,evidence:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>closeBankPayment(this.sql,id,actor,evidence));}
   checkoutInit(){this.podInit();ensureSchemaObjects(this.sql,UCP_PAYMENT_SCHEMA);ensureSchemaObjects(this.sql,CHECKOUT_SCHEMA);}
   checkoutReconcileAllow(id:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>{const now=Date.now(),[row]=this.sql.exec('SELECT next_at FROM checkout_reconcile_rates WHERE id=?',id).toArray();if(row&&Number(row.next_at)>now)return false;this.sql.exec('INSERT INTO checkout_reconcile_rates VALUES(?,?) ON CONFLICT(id) DO UPDATE SET next_at=excluded.next_at',id,now+10000);return true;});}
   checkoutReadiness(cursor:string){this.checkoutInit();return checkoutReadiness(this.sql,cursor);}

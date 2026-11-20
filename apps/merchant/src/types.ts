@@ -29,6 +29,8 @@ import type {ShippingSelection,ShippingResult} from './lib/shipping-store';
 
 export type Env = ShippingEnv & {
   CHECKOUT_ENABLED?:string;
+  CHECKOUT_QR_ENABLED?:string;
+  CHECKOUT_PAYMENTS_PAUSED?:string;
   CHECKOUT_BFF_TOKEN?:string;
   ACP_ENABLED?:string;
   ACP_ACCESS_VERIFIED?:string;
@@ -334,6 +336,9 @@ export type DOStub = {
   podClaim: (id:string,token:string) => Promise<ReturnType<MerchantDO['podClaim']>>;
   podFinish: (id:string,token:string,result:Parameters<MerchantDO['podFinish']>[2]) => Promise<void>;
   ucpPaymentBegin: (id: string, successUrl: string, cancelUrl: string,expected?:{version:number;total:number}) => Promise<ReturnType<MerchantDO['ucpPaymentBegin']>>;
+  checkoutBankBegin:(...args:Parameters<MerchantDO['checkoutBankBegin']>)=>Promise<ReturnType<MerchantDO['checkoutBankBegin']>>;
+  checkoutBankVerify:(...args:Parameters<MerchantDO['checkoutBankVerify']>)=>Promise<ReturnType<MerchantDO['checkoutBankVerify']>>;
+  checkoutBankClose:(...args:Parameters<MerchantDO['checkoutBankClose']>)=>Promise<ReturnType<MerchantDO['checkoutBankClose']>>;
   checkoutRpc:(command:import('./lib/checkout-core').CheckoutRpcCommand)=>Promise<import('./lib/checkout-core').CheckoutRpcResult>;
   checkoutReconcileAllow:(id:string)=>Promise<boolean>;
   checkoutReadiness:(cursor:string)=>Promise<ReturnType<MerchantDO['checkoutReadiness']>>;

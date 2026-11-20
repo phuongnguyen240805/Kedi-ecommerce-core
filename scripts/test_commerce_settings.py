@@ -12,7 +12,7 @@ class CommerceSettingsTests(unittest.TestCase):
  def test_invalid_values_do_not_partially_append(self):
   with tempfile.TemporaryDirectory() as tmp:
    p=Path(tmp)/'settings.env';p.write_text('original')
-   for bad in [{'MARKETING_ENABLED':'yes'},{'MARKETING_POLICY_VERSION':'x\nINJECTED=1'}]:
+   for bad in [{'MARKETING_ENABLED':'yes'},{'CHECKOUT_PAYMENTS_PAUSED':'yes'},{'MARKETING_POLICY_VERSION':'x\nINJECTED=1'}]:
     with self.assertRaises(ValueError):settings.append_settings(p,bad)
     self.assertEqual(p.read_text(),'original')
 if __name__=='__main__':unittest.main()

@@ -26,7 +26,7 @@ export function marketingRfm(sql:ShippingSql,cursor='',now=Date.now()){
  SELECT o.id,lower(o.customer_email) email,o.currency,o.created_at,
  MAX(0,o.total_cents-COALESCE((SELECT SUM(r.amount_cents) FROM refunds r WHERE r.order_id=o.id AND r.currency=o.currency AND r.status='succeeded'),0)) net
  FROM orders o WHERE o.status IN ('paid','processing','shipped','delivered') AND unixepoch(o.created_at)*1000>=?
- AND (o.stripe_checkout_session_id IS NOT NULL OR EXISTS(SELECT 1 FROM commerce_orders c WHERE c.order_id=o.id AND c.payment_status='paid'))
+ AND (EXISTS(SELECT 1 FROM payment_receipts pr WHERE pr.order_id=o.id AND pr.amount_minor=o.total_cents AND pr.currency=o.currency) OR o.stripe_checkout_session_id IS NOT NULL OR EXISTS(SELECT 1 FROM commerce_orders c WHERE c.order_id=o.id AND c.payment_status='paid'))
  ) SELECT s.id,s.email,p.currency,MAX(unixepoch(p.created_at)*1000) last_paid_at,COUNT(p.id) frequency,COALESCE(SUM(p.net),0) monetary_minor
  FROM marketing_subscribers s LEFT JOIN paid p ON p.email=s.email AND p.net>0
  WHERE s.email IN (${emails.map(()=>'?').join(',')})
@@ -41,6 +41,6 @@ export function experimentReport(sql:ShippingSql){
  COALESCE(SUM(CASE WHEN o.id IS NOT NULL THEN MAX(0,o.total_cents-COALESCE((SELECT SUM(r.amount_cents) FROM refunds r WHERE r.order_id=o.id AND r.currency=o.currency AND r.status='succeeded'),0)) ELSE 0 END),0) net_revenue_minor
  FROM marketing_experiments e LEFT JOIN marketing_jobs j ON json_extract(j.payload,'$.experiment_id')=e.id
  LEFT JOIN marketing_attribution a ON a.job_id=j.id LEFT JOIN orders o ON o.id=a.order_id AND o.status IN ('paid','processing','shipped','delivered')
- AND (o.stripe_checkout_session_id IS NOT NULL OR EXISTS(SELECT 1 FROM commerce_orders c WHERE c.order_id=o.id AND c.payment_status='paid'))
+ AND (EXISTS(SELECT 1 FROM payment_receipts pr WHERE pr.order_id=o.id AND pr.amount_minor=o.total_cents AND pr.currency=o.currency) OR o.stripe_checkout_session_id IS NOT NULL OR EXISTS(SELECT 1 FROM commerce_orders c WHERE c.order_id=o.id AND c.payment_status='paid'))
  GROUP BY e.id,variant,o.currency ORDER BY e.created_at DESC LIMIT 200`).toArray();
 }

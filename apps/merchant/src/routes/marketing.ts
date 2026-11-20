@@ -54,7 +54,7 @@ marketing.post('/subscribe',async c=>{
 marketing.get('/admin/overview',async c=>{
  await c.var.db.marketingInit();
  return c.json({subscribers:await c.var.db.query('SELECT status,count(*) count FROM marketing_subscribers GROUP BY status',[]),jobs:await c.var.db.query('SELECT kind,state,count(*) count FROM marketing_jobs GROUP BY kind,state',[]),
-  attributed_revenue:await c.var.db.query("SELECT o.currency,SUM(o.total_cents-COALESCE((SELECT SUM(r.amount_cents) FROM refunds r WHERE r.order_id=o.id AND r.currency=o.currency AND r.status='succeeded'),0)) net_revenue_minor,COUNT(*) orders FROM marketing_attribution a JOIN orders o ON o.id=a.order_id WHERE o.status IN ('paid','processing','shipped','delivered') AND (o.stripe_checkout_session_id IS NOT NULL OR EXISTS(SELECT 1 FROM commerce_orders c WHERE c.order_id=o.id AND c.payment_status='paid')) GROUP BY o.currency",[]),model:'last_click_7d_not_incremental_lift'});
+  attributed_revenue:await c.var.db.query("SELECT o.currency,SUM(o.total_cents-COALESCE((SELECT SUM(r.amount_cents) FROM refunds r WHERE r.order_id=o.id AND r.currency=o.currency AND r.status='succeeded'),0)) net_revenue_minor,COUNT(*) orders FROM marketing_attribution a JOIN orders o ON o.id=a.order_id WHERE o.status IN ('paid','processing','shipped','delivered') AND (EXISTS(SELECT 1 FROM payment_receipts pr WHERE pr.order_id=o.id AND pr.amount_minor=o.total_cents AND pr.currency=o.currency) OR o.stripe_checkout_session_id IS NOT NULL OR EXISTS(SELECT 1 FROM commerce_orders c WHERE c.order_id=o.id AND c.payment_status='paid')) GROUP BY o.currency",[]),model:'last_click_7d_not_incremental_lift'});
 });
 
 marketing.get('/admin/rfm',async c=>c.json(await c.var.db.marketingRfm(z.string().max(254).parse(c.req.query('cursor')||''))));

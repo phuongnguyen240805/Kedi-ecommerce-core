@@ -1,3 +1,4 @@
+import {UCP_PAYMENT_SCHEMA} from '../src/lib/ucp-payment';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -6,7 +7,7 @@ import {MARKETING_SCHEMA,subscribeMarketing,confirmMarketing} from '../src/lib/m
 import {COMMERCE_SCHEMA} from '../src/lib/commerce-core';
 import {marketingRfm,createExperiment,experimentPayload,experimentReport} from '../src/lib/marketing-admin';
 import type {ShippingSql} from '../src/lib/shipping-store';
-function fixture(){const db=new DatabaseSync(':memory:');db.exec(readFileSync(new URL('../src/do.ts',import.meta.url),'utf8').match(/const SCHEMA = `([\s\S]*?)`;/)![1]);db.exec(COMMERCE_SCHEMA);db.exec(MARKETING_SCHEMA);const sql:ShippingSql={exec:(q,...args)=>{const rows=db.prepare(q).all(...args) as Record<string,unknown>[];return {toArray:()=>rows};}};return {db,sql};}
+function fixture(){const db=new DatabaseSync(':memory:');db.exec(readFileSync(new URL('../src/do.ts',import.meta.url),'utf8').match(/const SCHEMA = `([\s\S]*?)`;/)![1]);db.exec(COMMERCE_SCHEMA+UCP_PAYMENT_SCHEMA);db.exec(MARKETING_SCHEMA);const sql:ShippingSql={exec:(q,...args)=>{const rows=db.prepare(q).all(...args) as Record<string,unknown>[];return {toArray:()=>rows};}};return {db,sql};}
 const copy={subject:'Your next custom print',text:'Explore the new products available at our store.'};
 test('RFM excludes unpaid COD, withdrawn consent and full refunds; money remains separated by currency',()=>{
  const {db,sql}=fixture();const now=Date.now();for(const email of ['a@test.com','b@test.com'])db.prepare('INSERT INTO marketing_subscribers VALUES(?,?,?, ?,?, ?,?)').run(email,email,email.startsWith('a')?'active':'withdrawn','nonce',now,now,now);
@@ -33,3 +34,5 @@ test('experiment revenue excludes unpaid COD attribution and deducts only same-c
  db.prepare("INSERT INTO refunds(id,order_id,stripe_refund_id,amount_cents,status,currency) VALUES('foreign','paid','re_other',500,'succeeded','EUR')").run();
  const report=experimentReport(sql),usd=report.find(r=>r.currency==='USD')!;assert.equal(usd.net_revenue_minor,2000);assert.equal(usd.attributed_orders,1);assert.equal(report.reduce((n,r)=>n+Number(r.attributed_orders),0),1);assert.equal(usd.id,id);
 });
+
+test('RFM includes reconciled QR receipts but excludes pending shared checkout orders',()=>{const {db,sql}=fixture(),now=Date.now();db.prepare("INSERT INTO marketing_subscribers VALUES('s','qr@test.com','active','nonce',?,?,?)").run(now,now,now);for(const status of ['paid','pending'])db.prepare('INSERT INTO orders(id,number,status,customer_email,subtotal_cents,tax_cents,total_cents,currency,created_at) VALUES(?,?,?, ?,100000,0,100000,?,?)').run(status,status,status,'qr@test.com','VND',new Date(now-1000).toISOString());db.prepare("INSERT INTO payment_receipts VALUES('techcombank','bank-verified','paid',100000,'VND',?)").run(new Date(now).toISOString());const rows=marketingRfm(sql,'',now).rows;assert.equal(rows.length,1);assert.equal(rows[0].frequency,1);assert.equal(rows[0].monetary_minor,100000);});

@@ -1,3 +1,4 @@
+import BankPayments from '@/pages/admin/bank-payments';
 import LaunchReadiness from '@/pages/admin/launch-readiness';
 import MarketingPage from '@/pages/admin/marketing';
 /**
@@ -137,6 +138,7 @@ function App() {
           path="/admin/orders"
         />
         <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><CommerceServicePage /></AuthenticationGuardWithPermission>} path="/admin/commerce-service" />
+        <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><BankPayments /></AuthenticationGuardWithPermission>} path="/admin/bank-payments" />
         <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><LaunchReadiness /></AuthenticationGuardWithPermission>} path="/admin/launch-readiness" />
         <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><MarketingPage /></AuthenticationGuardWithPermission>} path="/admin/marketing" />
         <Route
