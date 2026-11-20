@@ -92,7 +92,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          npm install
+          npm ci --workspace merchant --include-workspace-root
 
       - name: Download shared .env artifact
         uses: actions/download-artifact@v5
