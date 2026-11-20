@@ -83,6 +83,7 @@ export const siteConfig = () => ({
     },
     { label: "Vận hành đơn hàng", href: "/admin/commerce-service", permissions: ["admin:store"] },
     { label: "Marketing", href: "/admin/marketing", permissions: ["admin:store"] },
+    { label: "Printify", href: "/admin/printify", permissions: ["admin:store"] },
     {
       label: i18next.t("reviews-title"),
       href: "/admin/reviews",

@@ -1,6 +1,6 @@
 import {SignJWT} from 'jose';
 import type {DOStub,Env} from '../types';
-import {PrintifyClient} from './pod-printify';
+import {PrintifyClient,printifyFulfillmentState} from './pod-printify';
 import type {PodLine} from './pod-core';
 
 export async function podArtworkUrl(env:Env,base:string,line:PodLine){
@@ -31,7 +31,7 @@ export async function processPodFulfillment(env:Env,db:DOStub,id:string,base:str
    external=await provider.submit(job.snapshot,job.reference,line=>podArtworkUrl(env,base,line));
   }
   if(!external){await db.podFinish(id,token,{state:'submission_unknown'});return {unknown:true};}
-  const state=external.shipments?.length?(external.shipments.every(s=>!!s.delivered_at)?'delivered':'shipped'):'accepted';
+  const state=printifyFulfillmentState(external);
   await db.podFinish(id,token,{state,externalId:external.id,status:{provider_status:external.status,shipments:external.shipments||[]}});
   return {state};
  }catch{

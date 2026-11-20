@@ -1,4 +1,6 @@
 import BankPayments from '@/pages/admin/bank-payments';
+import PrintifyPage from '@/pages/admin/printify';
+import PodOperations from '@/pages/admin/pod-operations';
 import LaunchReadiness from '@/pages/admin/launch-readiness';
 import MarketingPage from '@/pages/admin/marketing';
 /**
@@ -141,6 +143,8 @@ function App() {
         <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><BankPayments /></AuthenticationGuardWithPermission>} path="/admin/bank-payments" />
         <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><LaunchReadiness /></AuthenticationGuardWithPermission>} path="/admin/launch-readiness" />
         <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><MarketingPage /></AuthenticationGuardWithPermission>} path="/admin/marketing" />
+        <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><PrintifyPage /></AuthenticationGuardWithPermission>} path="/admin/printify" />
+        <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><PodOperations /></AuthenticationGuardWithPermission>} path="/admin/pod-operations" />
         <Route
           element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><WebhooksPage /></AuthenticationGuardWithPermission>}
           path="/admin/webhooks"

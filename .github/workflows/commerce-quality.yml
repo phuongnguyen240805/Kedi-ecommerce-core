@@ -21,6 +21,8 @@ jobs:
       - run: npm run test:phase5 --workspace merchant
         env:
           ACP_CONTRACT_OUTPUT: ${{ runner.temp }}/acp-contract-output.json
+      - name: POD readiness without remote R2 or provider writes
+        run: npm run test:pod:ready --workspace merchant
       - name: Validate ACP HTTP responses against pinned specification
         run: |
           python3 -m pip install jsonschema==4.25.1

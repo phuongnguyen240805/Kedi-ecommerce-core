@@ -2,15 +2,26 @@ import {z} from 'zod';
 import type {PodSnapshot,PodLine} from './pod-core';
 import {ShippingError} from './smart-shipping';
 const order=z.object({id:z.string(),status:z.string(),metadata:z.object({shop_order_id:z.string()}).passthrough(),
+ line_items:z.array(z.object({status:z.string()}).passthrough()).optional(),
  shipments:z.array(z.object({carrier:z.string(),number:z.string(),url:z.string().optional(),delivered_at:z.string().optional()}).passthrough()).optional()}).passthrough();
 export type PrintifyOrder=z.infer<typeof order>;
+export function printifyFulfillmentState(order:PrintifyOrder){
+ if(order.status==='canceled')return 'canceled' as const;
+ if(order.line_items?.some(l=>['canceled','has-issues'].includes(l.status)))return 'needs_review' as const;
+ if(['on-hold','payment-not-received','has-issues','source-check-failed'].includes(order.status))return 'needs_review' as const;
+ if(order.shipments?.length)return order.status==='fulfilled'&&order.shipments.every(s=>!!s.delivered_at)?'delivered' as const:'shipped' as const;
+ if(['in-production','sending-to-production'].includes(order.status))return 'in_production' as const;
+ if(order.status==='pending')return 'accepted' as const;
+ return 'needs_review' as const;
+}
 export class PrintifyClient {
  constructor(private token:string,private shop:string,private transport:typeof fetch=fetch){
   if(!token||!/^\d+$/.test(shop))throw new ShippingError('pod_configuration_missing',503,'Printify is not configured.');
  }
  private async request(path:string,body?:unknown){
   let response:Response;
-  try{response=await this.transport(`https://api.printify.com/v1/shops/${this.shop}/${path}`,{
+  const transport=this.transport;
+  try{response=await transport(`https://api.printify.com/v1/shops/${this.shop}/${path}`,{
    method:body===undefined?'GET':'POST',redirect:'manual',signal:AbortSignal.timeout(15000),
    headers:{Authorization:`Bearer ${this.token}`,'User-Agent':'KediMuse-Commerce','Content-Type':'application/json'},
    ...(body===undefined?{}:{body:JSON.stringify(body)}),

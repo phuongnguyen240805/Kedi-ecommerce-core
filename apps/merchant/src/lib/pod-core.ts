@@ -99,14 +99,33 @@ export function approvePodArtwork(sql:ShippingSql,id:string,evidence:string,now=
  sql.exec('INSERT INTO pod_audit VALUES(?,?,?,?,?)',crypto.randomUUID(),id,'artwork.approved',evidence,now);
  sql.exec('UPDATE pod_artworks SET approved_at=? WHERE id=?',now,id);return {approved:true};
 }
+export function reviewPodArtwork(sql:ShippingSql,id:string,evidence:string,approve:boolean,now=Date.now()){
+ z.string().min(10).max(1000).parse(evidence);
+ const art=sql.exec('SELECT a.id,c.status FROM pod_artworks a JOIN carts c ON c.id=a.cart_id WHERE a.id=?',id).toArray()[0];
+ if(!art||art.status!=='open')fail('pod_artwork_locked','Only artwork in an open cart can be reviewed.');
+ sql.exec('INSERT INTO pod_audit VALUES(?,?,?,?,?)',crypto.randomUUID(),id,approve?'artwork.approved':'artwork.rejected',evidence,now);
+ sql.exec('UPDATE pod_artworks SET approved_at=? WHERE id=?',approve?now:null,id);
+ return {approved:approve};
+}
+export function savePodMappingDraft(sql:ShippingSql,sku:string,raw:unknown,actor:string){
+ z.string().min(1).max(150).parse(sku);const config=podMapping.parse(raw);
+ if(config.enabled)fail('pod_activation_deferred','Draft mappings must remain disabled.');
+ const variant=sql.exec("SELECT v.id FROM variants v JOIN products p ON p.id=v.product_id JOIN variant_prices vp ON vp.variant_id=v.id JOIN currencies c ON c.id=vp.currency_id WHERE v.sku=? AND v.status='active' AND p.status='active' AND c.code='USD' AND c.status='active' AND vp.price_cents>0",sku).toArray()[0];
+ if(!variant)fail('pod_sku_unavailable','An active Fufuni SKU with an explicit USD price is required.');
+ const version=crypto.randomUUID();
+ sql.exec("INSERT INTO pod_mappings VALUES(?,?,?) ON CONFLICT(sku) DO UPDATE SET version=excluded.version,config=excluded.config WHERE json_extract(pod_mappings.config,'$.enabled')=0",sku,version,JSON.stringify(config));
+ if(Number(sql.exec('SELECT changes() n').toArray()[0].n)!==1)fail('pod_mapping_active','Disable an active mapping through the production review process first.');
+ sql.exec('INSERT INTO pod_audit VALUES(?,?,?,?,?)',crypto.randomUUID(),sku,'mapping.draft_saved',JSON.stringify({actor,version}),Date.now());
+ return {version,enabled:false};
+}
 export function claimPodFulfillment(sql:ShippingSql,id:string,token:string,now=Date.now()){
  const row=sql.exec("SELECT f.*,o.status AS order_status FROM pod_fulfillments f JOIN orders o ON o.id=f.order_id WHERE f.id=? AND EXISTS(SELECT 1 FROM payment_receipts r WHERE r.order_id=o.id AND r.provider='stripe')",id).toArray()[0];
- if(!row||(!row.attempted_at&&['pending','canceled','refunded'].includes(String(row.order_status)))||Number(row.lease_until)>now||['needs_review','delivered','canceled'].includes(String(row.state)))return null;
+ if(!row||(!row.attempted_at&&['pending','canceled','refunded'].includes(String(row.order_status)))||Number(row.lease_until)>now||['delivered','canceled'].includes(String(row.state))||(row.state==='needs_review'&&!row.external_id))return null;
  // Record attempted before external I/O. Expired leases can reconcile only.
  sql.exec("UPDATE pod_fulfillments SET state=?,attempted_at=COALESCE(attempted_at,?),lease_token=?,lease_until=?,updated_at=? WHERE id=?",row.attempted_at?'submission_unknown':'submitting',now,token,now+60_000,now,id);
  return {id,reference:String(row.reference),snapshot:JSON.parse(String(row.body)) as PodSnapshot,externalId:row.external_id?String(row.external_id):null,reconcileOnly:!!row.attempted_at};
 }
-export function finishPodFulfillment(sql:ShippingSql,id:string,token:string,result:{state:'accepted'|'submission_unknown'|'needs_review'|'shipped'|'delivered';externalId?:string;status?:unknown},now=Date.now()){
+export function finishPodFulfillment(sql:ShippingSql,id:string,token:string,result:{state:'accepted'|'submission_unknown'|'needs_review'|'in_production'|'shipped'|'delivered'|'canceled';externalId?:string;status?:unknown},now=Date.now()){
  const row=sql.exec('SELECT * FROM pod_fulfillments WHERE id=? AND lease_token=?',id,token).toArray()[0];
  if(!row)fail('pod_lease_lost','POD lease is no longer owned.');
  if(row.external_id&&result.externalId&&row.external_id!==result.externalId)fail('pod_external_conflict','POD external order changed.');

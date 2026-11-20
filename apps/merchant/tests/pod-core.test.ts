@@ -2,9 +2,9 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
-import {POD_SCHEMA,podQuotePlan,storePodQuote,checkoutPodQuote,claimPodFulfillment,finishPodFulfillment,approvePodArtwork} from '../src/lib/pod-core';
+import {POD_SCHEMA,podQuotePlan,storePodQuote,checkoutPodQuote,claimPodFulfillment,finishPodFulfillment,approvePodArtwork,reviewPodArtwork,savePodMappingDraft} from '../src/lib/pod-core';
 import {UCP_PAYMENT_SCHEMA,beginUcpPayment,settleUcpPayment} from '../src/lib/ucp-payment';
-import {PrintifyClient} from '../src/lib/pod-printify';
+import {PrintifyClient,printifyFulfillmentState} from '../src/lib/pod-printify';
 import {processPodFulfillment} from '../src/lib/pod-runner';
 import type {ShippingSql} from '../src/lib/shipping-store';
 import type {DOStub,Env} from '../src/types';
@@ -110,4 +110,34 @@ test('submit kill switch leaves fresh jobs untouched and still reconciles attemp
  await processPodFulfillment(env,db,id,'https://merchant.test',client);assert.equal(calls,0);assert.equal(f.db.prepare('SELECT attempted_at FROM pod_fulfillments').get()!.attempted_at,null);
  f.tx(()=>claimPodFulfillment(f.sql,id,'first'));f.tx(()=>finishPodFulfillment(f.sql,id,'first',{state:'submission_unknown'}));
  await processPodFulfillment(env,db,id,'https://merchant.test',client);assert.equal(calls,1);
+});
+test('provider statuses distinguish production, issues, cancellation and incomplete shipment sets',()=>{
+ const order={id:'ext',status:'pending',metadata:{shop_order_id:'ref'}};
+ assert.equal(printifyFulfillmentState(order),'accepted');
+ for(const status of ['in-production','sending-to-production'])assert.equal(printifyFulfillmentState({...order,status}),'in_production');
+ for(const status of ['on-hold','payment-not-received','source-check-failed','has-issues','new-unknown-status'])assert.equal(printifyFulfillmentState({...order,status}),'needs_review');
+ assert.equal(printifyFulfillmentState({...order,status:'canceled',shipments:[{carrier:'C',number:'N'}]}),'canceled');
+ assert.equal(printifyFulfillmentState({...order,status:'fulfilled',line_items:[{status:'canceled'}]}),'needs_review');
+ assert.equal(printifyFulfillmentState({...order,status:'in-production',shipments:[{carrier:'C',number:'N',delivered_at:'now'}]}),'shipped');
+ assert.equal(printifyFulfillmentState({...order,status:'fulfilled',shipments:[{carrier:'C',number:'N',delivered_at:'now'}]}),'delivered');
+});
+test('disabled mapping draft requires active USD SKU, preserves active mapping and audits changes',()=>{
+ const f=fixture();assert.throws(()=>savePodMappingDraft(f.sql,'POD-S',f.mapping,'admin'),/disabled/);
+ assert.throws(()=>savePodMappingDraft(f.sql,'MISSING',{...f.mapping,enabled:false},'admin'),/USD/);
+ assert.throws(()=>f.tx(()=>savePodMappingDraft(f.sql,'POD-S',{...f.mapping,enabled:false},'admin')),/active mapping/);
+ f.db.exec('DELETE FROM pod_mappings');
+ const saved=f.tx(()=>savePodMappingDraft(f.sql,'POD-S',{...f.mapping,enabled:false},'admin'));assert.equal(saved.enabled,false);
+ assert.equal(JSON.parse(String(f.db.prepare('SELECT config FROM pod_mappings').get()!.config)).enabled,false);
+ assert.equal(f.db.prepare("SELECT COUNT(*) n FROM pod_audit WHERE event='mapping.draft_saved'").get()!.n,1);
+});
+test('artwork rejection revokes approval and review locks at checkout',()=>{
+ const f=fixture();reviewPodArtwork(f.sql,f.art,'Rejected after actual preview review.',false);assert.throws(f.plan,/approved/);
+ reviewPodArtwork(f.sql,f.art,'Approved following correction and review.',true);assert.equal(f.plan().lines.length,1);
+ const q=f.quote();f.tx(()=>checkoutPodQuote(f.sql,f.cart,q.id,q.total));assert.throws(()=>reviewPodArtwork(f.sql,f.art,'Cannot change payment-bound artwork.',false),/open cart/);
+});
+test('provider review jobs with an external ID reconcile only and canceled jobs are terminal',()=>{
+ const f=fixture();f.pay();const id=String(f.db.prepare('SELECT id FROM pod_fulfillments').get()!.id);
+ f.tx(()=>claimPodFulfillment(f.sql,id,'first'));f.tx(()=>finishPodFulfillment(f.sql,id,'first',{state:'needs_review',externalId:'external'}));
+ const next=f.tx(()=>claimPodFulfillment(f.sql,id,'review'));assert.equal(next?.reconcileOnly,true);
+ f.tx(()=>finishPodFulfillment(f.sql,id,'review',{state:'canceled',externalId:'external'}));assert.equal(claimPodFulfillment(f.sql,id,'again'),null);
 });
