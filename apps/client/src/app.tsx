@@ -1,3 +1,4 @@
+import LaunchReadiness from '@/pages/admin/launch-readiness';
 import MarketingPage from '@/pages/admin/marketing';
 /**
  * Copyright (c) 2024-2026 Ronan LE MEILLAT
@@ -136,6 +137,7 @@ function App() {
           path="/admin/orders"
         />
         <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><CommerceServicePage /></AuthenticationGuardWithPermission>} path="/admin/commerce-service" />
+        <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><LaunchReadiness /></AuthenticationGuardWithPermission>} path="/admin/launch-readiness" />
         <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><MarketingPage /></AuthenticationGuardWithPermission>} path="/admin/marketing" />
         <Route
           element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><WebhooksPage /></AuthenticationGuardWithPermission>}
