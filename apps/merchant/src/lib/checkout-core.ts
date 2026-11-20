@@ -4,6 +4,8 @@ import {ShippingError} from './smart-shipping';
 export const CHECKOUT_SCHEMA=`
 CREATE TABLE IF NOT EXISTS checkout_drafts(id TEXT PRIMARY KEY,source TEXT NOT NULL,input_json TEXT NOT NULL,snapshot_json TEXT NOT NULL,version INTEGER NOT NULL,claimed INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS checkout_idempotency(scope TEXT NOT NULL,key TEXT NOT NULL,request_json TEXT NOT NULL,response_json TEXT NOT NULL,PRIMARY KEY(scope,key));
+CREATE TABLE IF NOT EXISTS checkout_reconcile_rates(id TEXT PRIMARY KEY,next_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS checkout_recoveries(original_id TEXT PRIMARY KEY,checkout_id TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS checkout_handoffs(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,created_at INTEGER NOT NULL);
 `;
 const money=z.number().int().nonnegative().max(1_000_000_000);

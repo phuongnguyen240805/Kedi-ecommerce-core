@@ -1,3 +1,4 @@
+import {checkoutReadiness} from './lib/checkout-readiness';
 import {ShippingError} from './lib/smart-shipping';
 import {CHECKOUT_SCHEMA,checkoutInput,checkoutRead,checkoutSave,checkoutCommand,checkoutCancel,type CheckoutInput as RetailCheckoutInput} from './lib/checkout-core';
 import {EXPERIMENT_SCHEMA,createExperiment,marketingRfm,experimentReport} from './lib/marketing-admin';
@@ -1421,6 +1422,8 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
     }return {ok:true,value};}catch(error){if(error instanceof ShippingError)return {ok:false,error:{code:error.code,status:error.status,message:error.message}};if(error instanceof Error&&error.name==='ZodError')return {ok:false,error:{code:'invalid_input',status:400,message:'Invalid checkout input'}};throw error;}
   }
   checkoutInit(){this.podInit();ensureSchemaObjects(this.sql,UCP_PAYMENT_SCHEMA);ensureSchemaObjects(this.sql,CHECKOUT_SCHEMA);}
+  checkoutReconcileAllow(id:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>{const now=Date.now(),[row]=this.sql.exec('SELECT next_at FROM checkout_reconcile_rates WHERE id=?',id).toArray();if(row&&Number(row.next_at)>now)return false;this.sql.exec('INSERT INTO checkout_reconcile_rates VALUES(?,?) ON CONFLICT(id) DO UPDATE SET next_at=excluded.next_at',id,now+10000);return true;});}
+  checkoutReadiness(cursor:string){this.checkoutInit();return checkoutReadiness(this.sql,cursor);}
   checkoutGet(id:string){this.checkoutInit();return checkoutRead(this.sql,id);}
   checkoutCreate(raw:RetailCheckoutInput,source:string,key:string){this.checkoutInit();const input=checkoutInput.parse(raw);return this.ctx.storage.transactionSync(()=>checkoutCommand(this.sql,source+':create',key,input,()=>checkoutSave(this.sql,input,source)));}
   checkoutUpdate(id:string,patch:Partial<RetailCheckoutInput>,source:string,key:string,version?:number,browser=false){this.checkoutInit();return this.ctx.storage.transactionSync(()=>checkoutCommand(this.sql,source+':update:'+id,key,{patch,version:version??null,browser},()=>{
