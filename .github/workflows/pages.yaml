@@ -41,6 +41,9 @@ permissions:
   attestations: write
 
 jobs:
+  commerce-quality:
+    uses: ./.github/workflows/commerce-quality.yml
+
   create-env:
     uses: ./.github/workflows/create-env-artifact.yaml
     secrets: inherit
