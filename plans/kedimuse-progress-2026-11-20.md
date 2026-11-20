@@ -41,7 +41,7 @@ Kiểm tra: giá hàng 2 x 2500 + thuế 10% = 5500; sau sửa thành 3 sản ph
 
 Bổ sung test vòng đời HTTP UCP vào gate backend. Workflow Worker sau deploy gọi discovery và catalog qua HTTPS; lỗi HTTP sẽ làm job fail để tránh coi upload code là hoạt động thành công.
 
-Gate local: 151 test backend đạt; 6 test Admin UI và 7 test cấu hình deploy; TypeScript merchant và client đạt. Kết quả CI/deploy bản mới sẽ được bổ sung sau khi hoàn tất.
+Gate local: 151 test backend đạt; 6 test Admin UI và 7 test cấu hình deploy; TypeScript merchant và client đạt. Commit ede1418 đã push main. GitHub Actions run 44662598680: deployment-config, commerce-quality, create-env và build/deploy đều success; post-deploy UCP discovery/catalog smoke đạt. MCP workflow run 44662598598 skipped đúng yêu cầu.
 
 ## Những phần đã có từ các đợt trước
 
@@ -66,3 +66,7 @@ Gate local: 151 test backend đạt; 6 test Admin UI và 7 test cấu hình depl
 ## Bằng chứng triển khai trước đợt này
 
 Worker merchant đã deploy thành công bản f2c033f. Kiểm tra GET production sau migration legacy: /.well-known/ucp HTTP 200; /ucp/v1/products HTTP 200 (3 sản phẩm có sẵn); /v1/pod/status HTTP 200 với enabled=false. Đây không phải xác nhận 3 sản phẩm đó là catalog KediMuse đã duyệt hoặc checkout đã sẵn sàng bán thật.
+
+## Kết quả sau triển khai
+
+Commit code: ede14184b92a9a62297d0acd1baff6183a123915. Deploy Worker và post-deploy smoke thành công ngày 20/11/2026. Kiểm tra GET trực tiếp sau deploy xác nhận discovery/catalog HTTP 200; POD và marketing status vẫn disabled. Không chạy thanh toán, gửi email, gọi model hay sản xuất POD thật.
