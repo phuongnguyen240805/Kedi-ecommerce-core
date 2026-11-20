@@ -119,7 +119,7 @@ export function claimMarketing(sql:ShippingSql,token:string,now=Date.now()){
  sql.exec("UPDATE marketing_jobs SET state='unknown',lease_token=NULL,lease_until=0,updated_at=? WHERE state='sending' AND lease_until<?",now,now);
  const rows=sql.exec("SELECT * FROM marketing_jobs WHERE state='pending' AND due_at<=? AND attempts<5 ORDER BY due_at LIMIT 20",now).toArray();
  for(const row of rows){
-  const recent=sql.exec("SELECT count(*) n FROM marketing_jobs WHERE email=? AND kind<>'confirmation' AND state IN ('accepted','delivered') AND accepted_at>?",row.email,now-86400000).toArray()[0];
+  const recent=sql.exec("SELECT count(*) n FROM marketing_jobs WHERE email=? AND kind<>'confirmation' AND ((state IN ('accepted','delivered') AND accepted_at>?) OR (state IN ('sending','unknown') AND updated_at>?))",row.email,now-86400000,now-86400000).toArray()[0];
   if(row.kind!=='confirmation'&&Number(recent.n)>=3){sql.exec('UPDATE marketing_jobs SET due_at=? WHERE id=?',now+3600_000,row.id);continue;}
   sql.exec("UPDATE marketing_jobs SET state='sending',attempts=attempts+1,lease_token=?,lease_until=?,updated_at=? WHERE id=?",token,now+60000,now,row.id);
   const eligible=marketingEligible(sql,String(row.id),token);if(eligible)return eligible;
@@ -136,14 +136,18 @@ export function finishMarketing(sql:ShippingSql,id:string,token:string,outcome:'
 }
 export function recordMarketingEvent(sql:ShippingSql,input:{id:string;token:string;job_id:string;email:string;event:string;permanent:boolean},now=Date.now()){
  input={...input,email:emailAddress.parse(input.email)};
- const row=sql.exec('SELECT email FROM marketing_jobs WHERE id=?',input.job_id).toArray()[0];
+ const row=sql.exec('SELECT email,state,delivery_status FROM marketing_jobs WHERE id=?',input.job_id).toArray()[0];
  if(!row||String(row.email)!==emailAddress.parse(input.email))return {ignored:true};
  if(sql.exec('SELECT id FROM marketing_events WHERE id=?',input.id).toArray().length)return {duplicate:true};
  if(sql.exec('SELECT token FROM marketing_webhook_tokens WHERE token=?',input.token).toArray().length)return {duplicate:true};
  sql.exec('INSERT INTO marketing_webhook_tokens VALUES(?,?)',input.token,now);
  sql.exec('INSERT INTO marketing_events VALUES(?,?,?,?)',input.id,input.job_id,input.event,now);
- sql.exec('UPDATE marketing_jobs SET delivery_status=?,updated_at=? WHERE id=?',input.event,now,input.job_id);
- if(input.event==='delivered')sql.exec("UPDATE marketing_jobs SET state='delivered' WHERE id=?",input.job_id);
+ const finalFailure=['complained','unsubscribed'].includes(input.event)||(input.event==='failed'&&input.permanent);
+ const oldStatus=String(row.delivery_status||'');
+ // Click/open events remain in the event log; they cannot erase delivery or terminal failure evidence.
+ if(finalFailure||(!['complained','unsubscribed','failed'].includes(oldStatus)&&(input.event==='delivered'||!oldStatus||oldStatus!=='delivered'&&input.event==='accepted')))
+  sql.exec('UPDATE marketing_jobs SET delivery_status=?,updated_at=? WHERE id=?',input.event,now,input.job_id);
+ if(input.event==='delivered')sql.exec("UPDATE marketing_jobs SET state='delivered' WHERE id=? AND state<>'canceled'",input.job_id);
  if(input.event==='accepted')sql.exec("UPDATE marketing_jobs SET state='accepted' WHERE id=? AND state NOT IN ('delivered','canceled')",input.job_id);
  if(['accepted','delivered'].includes(input.event))sql.exec('UPDATE marketing_jobs SET accepted_at=COALESCE(accepted_at,?) WHERE id=?',now,input.job_id);
  if(['complained','unsubscribed'].includes(input.event)||(input.event==='failed'&&input.permanent)){

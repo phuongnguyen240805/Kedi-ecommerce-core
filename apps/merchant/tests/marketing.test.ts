@@ -72,3 +72,13 @@ test('signed preference tokens bind purpose and store; Mailgun signature rejects
  const signature=Array.from(new Uint8Array(await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(timestamp+nonce))),b=>b.toString(16).padStart(2,'0')).join('');
  assert.equal(await verifyMailgunSignature('secret',{timestamp,token:nonce,signature}),true);assert.equal(await verifyMailgunSignature('wrong',{timestamp,token:nonce,signature}),false);assert.equal(await verifyMailgunSignature('secret',{timestamp,token:nonce,signature},Date.now()+2*86400000),false);
 });
+
+test('late delivered and accepted events never reopen a canceled subscriber job or erase delivery evidence',()=>{
+ const f=fixture();f.subscribe();f.confirm();const job=f.tx(()=>claimMarketing(f.sql,'lease'))!;f.tx(()=>finishMarketing(f.sql,job.id,'lease','accepted','provider'));const event=(id:string,event:string)=>f.tx(()=>recordMarketingEvent(f.sql,{id,token:id,job_id:job.id,email:'buyer@example.test',event,permanent:false}));
+ event('delivered','delivered');event('clicked','clicked');event('accepted-late','accepted');assert.equal(f.db.prepare('SELECT delivery_status FROM marketing_jobs WHERE id=?').get(job.id)!.delivery_status,'delivered');
+ f.db.prepare("UPDATE marketing_jobs SET state='canceled' WHERE id=?").run(job.id);event('delivered-late','delivered');assert.equal(f.db.prepare('SELECT state FROM marketing_jobs WHERE id=?').get(job.id)!.state,'canceled');event('complained','complained');event('delivered-after-complaint','delivered');assert.equal(f.db.prepare('SELECT delivery_status FROM marketing_jobs WHERE id=?').get(job.id)!.delivery_status,'complained');assert.equal(f.sub().status,'suppressed');
+});
+test('frequency cap includes outstanding sends and unknown results so concurrent claims cannot exceed three per day',()=>{
+ const f=fixture();f.subscribe();f.confirm();const now=Date.now();f.db.exec("UPDATE marketing_jobs SET state='canceled'");for(let i=0;i<4;i++)f.db.prepare("INSERT INTO marketing_jobs(id,email,kind,payload,dedupe_key,state,due_at,created_at,updated_at) VALUES(?,'buyer@example.test','win_back','{}',?,'pending',?,?,?)").run('cap-'+i,'cap-'+i,now,now,now);
+ const first=f.tx(()=>claimMarketing(f.sql,'lease1',now))!;f.tx(()=>finishMarketing(f.sql,first.id,'lease1','unknown',undefined,now));assert.ok(f.tx(()=>claimMarketing(f.sql,'lease2',now)));assert.ok(f.tx(()=>claimMarketing(f.sql,'lease3',now)));assert.equal(f.tx(()=>claimMarketing(f.sql,'lease4',now)),null);assert.equal(f.db.prepare("SELECT count(*) n FROM marketing_jobs WHERE state='sending'").get()!.n,2);
+});

@@ -96,6 +96,24 @@ jobs:
           # Disabled yet because token size is 8kB and Cloudflare limit is 5kB
           # echo "AUTH0_MANAGEMENT_TOKEN=${{ secrets.AUTH0_MANAGEMENT_TOKEN }}" >> .env
 
+      - name: Append supported commerce settings safely
+        env:
+          MARKETING_ENABLED: ${{ vars.MARKETING_ENABLED }}
+          MARKETING_SEND_ENABLED: ${{ vars.MARKETING_SEND_ENABLED }}
+          MARKETING_POLICY_VERSION: ${{ vars.MARKETING_POLICY_VERSION }}
+          MARKETING_FROM_EMAIL: ${{ vars.MARKETING_FROM_EMAIL }}
+          MARKETING_CONTACT_ADDRESS: ${{ vars.MARKETING_CONTACT_ADDRESS }}
+          MARKETING_WELCOME_DISCOUNT_CODE: ${{ vars.MARKETING_WELCOME_DISCOUNT_CODE }}
+          MARKETING_MAILGUN_DOMAIN: ${{ vars.MARKETING_MAILGUN_DOMAIN }}
+          MARKETING_MAILGUN_BASE_URL: ${{ vars.MARKETING_MAILGUN_BASE_URL }}
+          MARKETING_AI_ENABLED: ${{ vars.MARKETING_AI_ENABLED }}
+          MARKETING_AI_MODEL: ${{ vars.MARKETING_AI_MODEL }}
+          STORE_PUBLIC_API_URL: ${{ vars.STORE_PUBLIC_API_URL }}
+          FEEDS_ENABLED: ${{ vars.FEEDS_ENABLED }}
+          MAILGUN_WEBHOOK_SIGNING_KEY: ${{ secrets.MAILGUN_WEBHOOK_SIGNING_KEY }}
+          MARKETING_OPENAI_API_KEY: ${{ secrets.MARKETING_OPENAI_API_KEY }}
+        run: python3 scripts/append-commerce-settings.py
+
       - name: Generate wrangler.jsonc from .env
         run: |
           python3 scripts/generate-wrangler-jsonc.py .env apps/merchant/wrangler.jsonc apps/merchant/wrangler.jsonc

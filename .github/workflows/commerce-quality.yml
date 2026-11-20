@@ -16,6 +16,7 @@ jobs:
           cache: npm
       - run: npm ci --workspace merchant --workspace client --include-workspace-root
       - run: python3 -m unittest discover -s scripts -p test_generate_wrangler.py
+      - run: python3 -m unittest discover -s scripts -p test_commerce_settings.py
       - run: npm run typecheck --workspace merchant
       - run: npm run test:phase5 --workspace merchant
         env:

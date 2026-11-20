@@ -18,7 +18,8 @@ function taxRate(sql:ShippingSql,country:string|undefined,code:string|null){
  const rates=sql.exec("SELECT * FROM tax_rates WHERE status='active' AND (country_code=? OR country_code IS NULL) AND (tax_code=? OR tax_code IS NULL)",country||'',code).toArray();
  const score=(r:Record<string,unknown>)=>(r.country_code===country?2:0)+(r.tax_code===code&&code!==null?1:0);
  rates.sort((a,b)=>score(b)-score(a));if(rates.length>1&&score(rates[0])===score(rates[1]))fail('tax_policy_ambiguous','More than one tax rule matches this item');
- const rate=Number(rates[0]?.rate_percentage||0);if(!Number.isFinite(rate)||rate<0||rate>100)fail('invalid_tax_policy','Invalid tax policy');return rate;
+ if(!rates.length)fail('tax_policy_missing','The merchant must configure an explicit tax rule, including a zero-rate rule when applicable');
+ const rate=Number(rates[0].rate_percentage);if(!Number.isFinite(rate)||rate<0||rate>100)fail('invalid_tax_policy','Invalid tax policy');return rate;
 }
 export function quoteCheckout(sql:ShippingSql,raw:CheckoutInput){
  const input=checkoutInput.parse(raw),[currency]=sql.exec("SELECT id FROM currencies WHERE code=? AND status='active'",input.currency).toArray();if(!currency)fail('currency_unavailable','Currency is not configured',400);
@@ -33,7 +34,7 @@ export function quoteCheckout(sql:ShippingSql,raw:CheckoutInput){
   if(seen.has(String(v.sku)))fail('duplicate_product','Combine quantities for the same product',400);seen.add(String(v.sku));
   if(sql.exec("SELECT sku FROM pod_mappings WHERE sku=? AND json_extract(config,'$.enabled')=1",v.sku).toArray().length)fail('pod_requires_artwork','Use the custom print checkout for this product',400);
   if(Number(v.available)<line.quantity)fail('insufficient_stock','Requested quantity is unavailable');
-  const price=money.positive().parse(v.resolved_price),rate=input.address?taxRate(sql,input.address.country,v.tax_code as string|null):0;
+  const price=money.positive().parse(v.resolved_price),rate=input.address&&regions.length?taxRate(sql,input.address.country,v.tax_code as string|null):0;
   const unit=inclusive?Math.round(price/(1+rate/100)):price,net=money.parse(unit*line.quantity),lineTax=money.parse(inclusive?price*line.quantity-net:Math.round(net*rate/100));subtotal+=net;tax+=lineTax;
   if(v.requires_shipping!==0){physical=true;if(!Number.isFinite(v.weight_g)||Number(v.weight_g)<=0)messages.push({code:'weight_missing',content:'The merchant must configure product shipping weight'});weight+=Number(v.weight_g||0)*line.quantity;if(v.shipping_class_id||v.product_shipping_class)messages.push({code:'shipping_context_required',content:'This product needs a merchant shipping quote'});}
   return {id:String(v.id),sku:String(v.sku),title:String(v.title||v.product_title),quantity:line.quantity,unit_price:unit,display_unit_price:price,subtotal:net,tax:lineTax,total:net+lineTax,requires_shipping:v.requires_shipping!==0};

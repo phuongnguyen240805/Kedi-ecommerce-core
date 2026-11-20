@@ -40,3 +40,5 @@ test('Pancake reference SKU can exercise VND checkout in isolation without stock
  const state=f.tx(()=>checkoutSave(f.sql,input,'web'));assert.equal(state.total,483000);assert.equal(state.subtotal,453000);const attempt=f.tx(()=>beginUcpPayment(f.sql,state.id,'https://shop.test/ok','https://shop.test/cancel',Date.now(),{version:state.version,total:state.total}));
  assert.equal(attempt.request.line_items?.[0].price_data?.currency,'vnd');assert.equal(attempt.request.line_items?.[0].price_data?.unit_amount,453000);assert.equal(f.db.prepare('SELECT count(*) n FROM orders').get()!.n,0);assert.equal(f.db.prepare('SELECT count(*) n FROM pod_fulfillments').get()!.n,0);
 });
+
+test('supported destination never silently treats missing tax configuration as zero tax',()=>{const f=fixture();f.db.exec('DELETE FROM tax_rates');assert.throws(()=>quoteCheckout(f.sql,f.input),/explicit tax rule/);f.db.exec("INSERT INTO tax_rates(id,display_name,country_code,rate_percentage) VALUES('explicit-zero','Approved test exemption','US',0)");assert.equal(quoteCheckout(f.sql,f.input).tax,0);assert.equal(quoteCheckout(f.sql,f.input).total,5700);});
