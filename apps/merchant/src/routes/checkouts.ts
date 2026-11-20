@@ -18,7 +18,8 @@ export async function checkoutHandoff(env:Env,id:string,expires:string){
 }
 checkouts.get('/catalog',async c=>{
  if(c.env.CHECKOUT_ENABLED!=='true')throw ApiError.serviceUnavailable('Checkout is disabled');
- const rows=await c.var.db.query(`SELECT v.sku,v.title,vp.price_cents unit_price,cur.code currency,MAX(0,COALESCE(i.on_hand-i.reserved,0)) available FROM variants v JOIN products p ON p.id=v.product_id JOIN variant_prices vp ON vp.variant_id=v.id JOIN currencies cur ON cur.id=vp.currency_id LEFT JOIN inventory i ON i.sku=v.sku WHERE v.status='active' AND p.status='active' AND cur.status='active' AND v.requires_shipping=1 AND v.weight_g>0 AND vp.price_cents>0 ORDER BY v.sku,cur.code LIMIT 500`,[]);
+ await c.var.db.podInit();
+ const rows=await c.var.db.query(`SELECT v.sku,v.title,vp.price_cents unit_price,cur.code currency,MAX(0,COALESCE(i.on_hand-i.reserved,0)) available FROM variants v JOIN products p ON p.id=v.product_id JOIN variant_prices vp ON vp.variant_id=v.id JOIN currencies cur ON cur.id=vp.currency_id LEFT JOIN inventory i ON i.sku=v.sku WHERE v.status='active' AND p.status='active' AND cur.status='active' AND v.requires_shipping=1 AND v.weight_g>0 AND vp.price_cents>0 AND COALESCE(i.on_hand-i.reserved,0)>0 AND NOT EXISTS(SELECT 1 FROM pod_mappings pm WHERE pm.sku=v.sku AND json_extract(pm.config,'$.enabled')=1) ORDER BY v.sku,cur.code LIMIT 500`,[]);
  return c.json({items:rows});
 });
 checkouts.get('/status',c=>c.json({enabled:c.env.CHECKOUT_ENABLED==='true',stripe_configured:!!c.env.STRIPE_SECRET_KEY,storefront_configured:!!c.env.STORE_URL,artwork_upload_enabled:false}));
