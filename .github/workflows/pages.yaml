@@ -45,8 +45,8 @@ jobs:
     secrets: inherit
 
   build:
-    runs-on: ubuntu-latest
-    needs: create-env
+    runs-on: ubuntu-24.04
+    needs: [create-env, commerce-quality]
 
     steps:
       - name: Checkout repository
@@ -70,7 +70,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          npm i
+          npm ci --workspace client --workspace merchant --include-workspace-root
 
       - name: Download shared .env artifact
         uses: actions/download-artifact@v5
@@ -78,7 +78,7 @@ jobs:
           name: shared-env
           path: .
 
-      # .env.enc was encrypted with openssl enc -aes-256-cbc -salt -in env_and_wrangler.tar.gz -out .env.enc -iter 10000 -pass pass:"${{ secrets.CRYPTOKEN }}"
+      # .env.enc was encrypted with openssl enc -aes-256-cbc -salt -in env_and_wrangler.tar.gz -out .env.enc -iter 10000 -pass env:CRYPTOKEN
       # Decrypt it using the same key and parameters
       - name: Decrypt .env + wrangler.jsonc artifact
         run: |
@@ -94,35 +94,11 @@ jobs:
             exit 1
           fi
           
-      - name: Build project
-        # You can change the base path to your repository name
-        run: |
-          source .env
-          export NODE_ENV=production
-          npm run build:env -- --base="/${{ github.event.repository.name }}/"
-        
-      - name: Build llms export
-        run: |
-          source .env
+      - name: Build only the Admin storefront
+        env:
+          NODE_ENV: production
+        run: node scripts/build-admin.mjs --base="/${{ github.event.repository.name }}/"
 
-          # Ensure do.ts uses type-only import for DurableObject during local Node/OpenAPI export.
-          sed -i.bak "s|import { DurableObject } from 'cloudflare:workers';|import type { DurableObject } from 'cloudflare:workers';|" apps/merchant/src/do.ts
-
-          # run export logic in no-backend mode
-          npm run export:llms -- --no-backend --export-swagger
-          npm run export:llms:slim -- --no-backend
-
-          # restore file for worker deploy step
-          mv apps/merchant/src/do.ts.bak apps/merchant/src/do.ts
-
-          cp -v llm* apps/client/dist/
-          ls -lR apps/client/dist/
-
-      - name: Copy inspector build to client dist
-        run: |
-          mkdir -p apps/client/dist/inspector
-          cp -a apps/inspector/dist/* apps/client/dist/inspector/
-          ls -lR apps/client/dist/
       - name: Upload pages artifact
         uses: actions/upload-pages-artifact@v4
         with:
