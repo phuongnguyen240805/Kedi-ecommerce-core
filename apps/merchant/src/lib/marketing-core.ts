@@ -146,7 +146,7 @@ export function recordMarketingEvent(sql:ShippingSql,input:{id:string;token:stri
  const oldStatus=String(row.delivery_status||'');
  // Click/open events remain in the event log; they cannot erase delivery or terminal failure evidence.
  if(finalFailure||(!['complained','unsubscribed','failed'].includes(oldStatus)&&(input.event==='delivered'||!oldStatus||oldStatus!=='delivered'&&input.event==='accepted')))
-  sql.exec('UPDATE marketing_jobs SET delivery_status=?,updated_at=? WHERE id=?',input.event,now,input.job_id);
+  sql.exec('UPDATE marketing_jobs SET delivery_status=?,updated_at=? WHERE id=?',input.event==='failed'&&!input.permanent?'temporary_failure':input.event,now,input.job_id);
  if(input.event==='delivered')sql.exec("UPDATE marketing_jobs SET state='delivered' WHERE id=? AND state<>'canceled'",input.job_id);
  if(input.event==='accepted')sql.exec("UPDATE marketing_jobs SET state='accepted' WHERE id=? AND state NOT IN ('delivered','canceled')",input.job_id);
  if(['accepted','delivered'].includes(input.event))sql.exec('UPDATE marketing_jobs SET accepted_at=COALESCE(accepted_at,?) WHERE id=?',now,input.job_id);
