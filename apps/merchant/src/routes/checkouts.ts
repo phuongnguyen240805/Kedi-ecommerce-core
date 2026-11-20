@@ -1,3 +1,4 @@
+import {interpretShopping} from '../lib/shopping-ai';
 import {callCheckout} from '../lib/checkout-rpc';
 import {Hono} from 'hono';
 import {bodyLimit} from 'hono/body-limit';
@@ -9,6 +10,8 @@ import {checkoutInput} from '../lib/checkout-core';
 import {startStripeCheckout,reconcileStripeCheckout} from '../lib/ucp-payment-service';
 import {storeApiBase} from '../lib/stores';
 export const checkouts=new Hono<HonoEnv>();
+async function physicalCatalog(db:import('../types').DOStub){await db.podInit();return db.query<{sku:string;title:string;unit_price:number;currency:string;available:number}>(`SELECT v.sku,v.title,vp.price_cents unit_price,cur.code currency,MAX(0,COALESCE(i.on_hand-i.reserved,0)) available FROM variants v JOIN products p ON p.id=v.product_id JOIN variant_prices vp ON vp.variant_id=v.id JOIN currencies cur ON cur.id=vp.currency_id LEFT JOIN inventory i ON i.sku=v.sku WHERE v.status='active' AND p.status='active' AND cur.status='active' AND v.requires_shipping=1 AND v.weight_g>0 AND vp.price_cents>0 AND COALESCE(i.on_hand-i.reserved,0)>0 AND NOT EXISTS(SELECT 1 FROM pod_mappings pm WHERE pm.sku=v.sku AND json_extract(pm.config,'$.enabled')=1) ORDER BY v.sku,cur.code LIMIT 500`,[]);}
+
 export async function checkoutHandoff(env:Env,id:string,expires:string){
  if(!env.ORDER_TOKEN_SECRET||env.ORDER_TOKEN_SECRET.length<32||!env.STORE_URL)throw ApiError.serviceUnavailable('Checkout handoff is not configured');
  const url=new URL('/commerce-handoff',env.STORE_URL);if(url.protocol!=='https:')throw ApiError.serviceUnavailable('HTTPS storefront required');
@@ -19,10 +22,10 @@ export async function checkoutHandoff(env:Env,id:string,expires:string){
 checkouts.get('/catalog',async c=>{
  if(c.env.CHECKOUT_ENABLED!=='true')throw ApiError.serviceUnavailable('Checkout is disabled');
  await c.var.db.podInit();
- const rows=await c.var.db.query(`SELECT v.sku,v.title,vp.price_cents unit_price,cur.code currency,MAX(0,COALESCE(i.on_hand-i.reserved,0)) available FROM variants v JOIN products p ON p.id=v.product_id JOIN variant_prices vp ON vp.variant_id=v.id JOIN currencies cur ON cur.id=vp.currency_id LEFT JOIN inventory i ON i.sku=v.sku WHERE v.status='active' AND p.status='active' AND cur.status='active' AND v.requires_shipping=1 AND v.weight_g>0 AND vp.price_cents>0 AND COALESCE(i.on_hand-i.reserved,0)>0 AND NOT EXISTS(SELECT 1 FROM pod_mappings pm WHERE pm.sku=v.sku AND json_extract(pm.config,'$.enabled')=1) ORDER BY v.sku,cur.code LIMIT 500`,[]);
+ const rows=await physicalCatalog(c.var.db);
  return c.json({items:rows});
 });
-checkouts.get('/status',c=>c.json({enabled:c.env.CHECKOUT_ENABLED==='true',stripe_configured:!!c.env.STRIPE_SECRET_KEY,storefront_configured:!!c.env.STORE_URL,artwork_upload_enabled:false}));
+checkouts.get('/status',c=>c.json({enabled:c.env.CHECKOUT_ENABLED==='true',stripe_configured:!!c.env.STRIPE_SECRET_KEY,storefront_configured:!!c.env.STORE_URL,shopping_ai_available:c.env.SHOPPING_AI_ENABLED==='true'&&!!c.env.SHOPPING_OPENAI_API_KEY&&!!c.env.SHOPPING_AI_MODEL,artwork_upload_enabled:false}));
 checkouts.use('*',bodyLimit({maxSize:32000}),async(c,next)=>{
  const token=c.env.CHECKOUT_BFF_TOKEN;
  if(token&&token.length>=32){const encoder=new TextEncoder(),key=await crypto.subtle.importKey('raw',encoder.encode(token),{name:'HMAC',hash:'SHA-256'},false,['sign','verify']);if(await crypto.subtle.verify('HMAC',key,await crypto.subtle.sign('HMAC',key,encoder.encode('Bearer '+token)),encoder.encode(c.req.header('Authorization')||''))){await next();return;}}
@@ -30,6 +33,12 @@ checkouts.use('*',bodyLimit({maxSize:32000}),async(c,next)=>{
 });
 checkouts.use('*',async(c,next)=>{c.header('Cache-Control','private, no-store');if(c.req.method!=='GET'&&c.env.CHECKOUT_ENABLED!=='true')throw ApiError.serviceUnavailable('Checkout is disabled');await next();});
 checkouts.get('/readiness',async c=>c.json({...await c.var.db.checkoutReadiness(z.string().max(200).parse(c.req.query('cursor')||'')),integrations:{stripe_key_present:!!c.env.STRIPE_SECRET_KEY,stripe_webhook_present:!!c.env.STRIPE_WEBHOOK_SECRET,stripe_mode:c.env.STRIPE_SECRET_KEY?.startsWith('sk_test_')?'test':c.env.STRIPE_SECRET_KEY?.startsWith('sk_live_')?'live':'unknown',feeds_enabled:c.env.FEEDS_ENABLED==='true',marketing_enabled:c.env.MARKETING_ENABLED==='true',marketing_send_enabled:c.env.MARKETING_SEND_ENABLED==='true',mailgun_key_present:!!c.env.MAILGUN_API_KEY,mailgun_signing_key_present:!!c.env.MAILGUN_WEBHOOK_SIGNING_KEY,marketing_policy_present:!!c.env.MARKETING_POLICY_VERSION,marketing_sender_present:!!c.env.MARKETING_FROM_EMAIL,marketing_contact_present:!!c.env.MARKETING_CONTACT_ADDRESS,mcp_deferred:true,pod_deferred:true}}));
+checkouts.post('/search',async c=>{
+ const input=z.object({query:z.string().trim().min(1).max(200),interpret:z.boolean().default(false),rate_key:z.string().regex(/^[a-f0-9]{64}$/)}).strict().parse(await c.req.json());let terms=input.query;
+ if(input.interpret){if(c.env.SHOPPING_AI_ENABLED!=='true'||!c.env.SHOPPING_OPENAI_API_KEY||!c.env.SHOPPING_AI_MODEL)throw ApiError.serviceUnavailable('Shopping AI is not configured');await c.var.db.shoppingAiAllow(input.rate_key);terms=await interpretShopping(input.query,c.env.SHOPPING_OPENAI_API_KEY,c.env.SHOPPING_AI_MODEL);}
+ const words=terms.toLocaleLowerCase().normalize('NFKC').split(/\s+/).filter(Boolean);const rows=await physicalCatalog(c.var.db);
+ return c.json({items:words.length?rows.filter(row=>words.every(word=>(row.title+' '+row.sku).toLocaleLowerCase().normalize('NFKC').includes(word))).slice(0,20):[],interpreted:input.interpret,query:terms});
+});
 checkouts.post('/',async c=>{const key=z.string().uuid().parse(c.req.header('Idempotency-Key'));return c.json(await callCheckout(c.var.db,{action:'create',input:checkoutInput.parse(await c.req.json()),source:'web',key}),201);});
 checkouts.post('/handoff',async c=>{
  const {token}=z.object({token:z.string().min(20).max(3000)}).strict().parse(await c.req.json());if(!c.env.ORDER_TOKEN_SECRET||c.env.ORDER_TOKEN_SECRET.length<32)throw ApiError.serviceUnavailable('Handoff is not configured');

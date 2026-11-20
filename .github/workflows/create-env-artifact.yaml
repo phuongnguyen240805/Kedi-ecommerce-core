@@ -110,6 +110,9 @@ jobs:
           MARKETING_AI_MODEL: ${{ vars.MARKETING_AI_MODEL }}
           STORE_PUBLIC_API_URL: ${{ vars.STORE_PUBLIC_API_URL }}
           FEEDS_ENABLED: ${{ vars.FEEDS_ENABLED }}
+          SHOPPING_AI_ENABLED: ${{ vars.SHOPPING_AI_ENABLED }}
+          SHOPPING_AI_MODEL: ${{ vars.SHOPPING_AI_MODEL }}
+          SHOPPING_OPENAI_API_KEY: ${{ secrets.SHOPPING_OPENAI_API_KEY }}
           MAILGUN_WEBHOOK_SIGNING_KEY: ${{ secrets.MAILGUN_WEBHOOK_SIGNING_KEY }}
           MARKETING_OPENAI_API_KEY: ${{ secrets.MARKETING_OPENAI_API_KEY }}
         run: python3 scripts/append-commerce-settings.py
