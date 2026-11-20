@@ -33,6 +33,7 @@ marketing.post('/recovery',async c=>{
  const {token}=z.object({token:z.string().max(4000)}).parse(await json(c.req.raw));
  let claims;try{claims=await verifyMarketingToken(c.env,token,'recovery');}catch{throw ApiError.invalidRequest('Invalid recovery link');}
  await c.var.db.marketingInit();
+ if(claims.scope==='checkout'){const state=await c.var.db.marketingRecoverCheckout(z.string().uuid().parse(claims.checkout_id),claims.subscriber_id);return c.json({scope:'checkout',checkout_id:state.id});}
  const [cart]=await c.var.db.query<{id:string;expires_at:string}>(`SELECT c.id,c.expires_at FROM carts c JOIN marketing_subscribers s ON lower(c.customer_email)=s.email WHERE c.id=? AND s.id=?`,[claims.cart_id,claims.subscriber_id]);
  if(!cart||Date.parse(cart.expires_at)<=Date.now())throw ApiError.invalidRequest('This cart has expired');
  const [checkout]=await c.var.db.query<{checkout_id:string}>('SELECT checkout_id FROM pod_checkouts WHERE cart_id=?',[cart.id]);
@@ -41,7 +42,11 @@ marketing.post('/recovery',async c=>{
  if(quote){const data=JSON.parse(quote.snapshot),line=data.lines?.[0];if(line){const [art]=await c.var.db.query('SELECT id,width,height,sha256,approved_at FROM pod_artworks WHERE id=? AND cart_id=?',[line.artwork_id,cart.id]);draft={sku:line.sku,qty:line.qty,art,recipient:data.recipient};}}
  return c.json({scope:quote||checkout?'pod':'commerce',cart_id:cart.id,checkout_id:checkout?.checkout_id||null,draft});
 });
-marketing.use('*',authMiddleware,adminOnly);
+marketing.use('*',async(c,next)=>{
+ const token=c.env.MARKETING_BFF_TOKEN;
+ if(c.req.method==='POST'&&c.req.path.endsWith('/subscribe')&&token&&token.length>=32){const encoder=new TextEncoder(),key=await crypto.subtle.importKey('raw',encoder.encode(token),{name:'HMAC',hash:'SHA-256'},false,['sign','verify']);if(await crypto.subtle.verify('HMAC',key,await crypto.subtle.sign('HMAC',key,encoder.encode('Bearer '+token)),encoder.encode(c.req.header('Authorization')||''))){await next();return;}}
+ await authMiddleware(c,async()=>{await adminOnly(c,next);});
+});
 marketing.post('/subscribe',async c=>{
  if(c.env.MARKETING_ENABLED!=='true'||!c.env.MARKETING_POLICY_VERSION)throw ApiError.serviceUnavailable('Email registration is not available');
  return c.json(await c.var.db.marketingSubscribe(subscriptionInput.parse(await json(c.req.raw)),c.env.MARKETING_POLICY_VERSION));

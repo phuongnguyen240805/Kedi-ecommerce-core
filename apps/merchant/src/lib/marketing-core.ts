@@ -1,3 +1,4 @@
+import {sharedCheckoutRecoverable} from './checkout-marketing';
 import {EXPERIMENT_SCHEMA,experimentPayload} from './marketing-admin';
 import {z} from 'zod';
 import type {ShippingSql} from './shipping-store';
@@ -87,6 +88,10 @@ export function planMarketing(sql:ShippingSql,now=Date.now()){
    // Catalog-only guest aliases cannot become recipients; only confirmed subscribers reach this loop.
    job(sql,email,'abandoned',`abandoned:${cartId}`,{subscriber_id:sid,cart_id:cartId,checkout_id:pod?.checkout_id||null},now,now);
   }
+  if(sql.exec("SELECT name FROM sqlite_master WHERE name='checkout_drafts'").toArray().length){
+   const shared=sql.exec(`SELECT d.id FROM checkout_drafts d JOIN ucp_checkout_sessions s ON s.id=d.id WHERE lower(json_extract(d.input_json,'$.buyer.email'))=? AND unixepoch(s.updated_at)*1000<? AND unixepoch(s.created_at)*1000>? AND NOT EXISTS(SELECT 1 FROM checkout_recoveries r WHERE r.checkout_id=d.id) ORDER BY s.created_at DESC LIMIT 10`,email,now-3600_000,now-7*86400000).toArray();
+   for(const checkout of shared)if(sharedCheckoutRecoverable(sql,String(checkout.id),email,now))job(sql,email,'abandoned',`abandoned:checkout:${checkout.id}`,{subscriber_id:sid,scope:'checkout',checkout_id:checkout.id},now,now);
+  }
   const orders=sql.exec("SELECT * FROM orders WHERE lower(customer_email)=? AND status IN ('paid','processing','shipped','delivered') ORDER BY created_at DESC LIMIT 100",email).toArray();
   for(const order of orders){
    const delivered=order.status==='delivered'||sql.exec("SELECT id FROM pod_fulfillments WHERE order_id=? AND state='delivered'",order.id).toArray().length;
@@ -100,14 +105,14 @@ export function planMarketing(sql:ShippingSql,now=Date.now()){
  }
  // Paid checkout cancels queued recovery, including delayed Stripe success.
  for(const pending of sql.exec("SELECT id,payload FROM marketing_jobs WHERE kind='abandoned' AND state IN ('pending','sending') LIMIT 1000").toArray()){
-  if(paidCart(sql,String(JSON.parse(String(pending.payload)).cart_id)))sql.exec("UPDATE marketing_jobs SET state='canceled',updated_at=? WHERE id=?",now,pending.id);
+  const payload=JSON.parse(String(pending.payload));if(payload.scope==='checkout'?!sharedCheckoutRecoverable(sql,String(payload.checkout_id),undefined,now):paidCart(sql,String(payload.cart_id)))sql.exec("UPDATE marketing_jobs SET state='canceled',updated_at=? WHERE id=?",now,pending.id);
  }
 }
 export function marketingEligible(sql:ShippingSql,id:string,token:string){
  const row=sql.exec("SELECT j.*,s.id AS subscriber_id,s.status AS subscriber_status,s.nonce FROM marketing_jobs j JOIN marketing_subscribers s ON s.email=j.email WHERE j.id=? AND j.lease_token=? AND j.state='sending'",id,token).toArray()[0];
  if(!row||sql.exec('SELECT email FROM marketing_suppressions WHERE email=?',row.email).toArray().length)return null;
  if(row.kind==='confirmation'?row.subscriber_status!=='pending':row.subscriber_status!=='active')return null;
- if(row.kind==='abandoned'&&paidCart(sql,String(JSON.parse(String(row.payload)).cart_id)))return null;
+ if(row.kind==='abandoned'){const payload=JSON.parse(String(row.payload));if(payload.scope==='checkout'?!sharedCheckoutRecoverable(sql,String(payload.checkout_id),String(row.email)):paidCart(sql,String(payload.cart_id)))return null;}
  return {...row,id:String(row.id),email:String(row.email),kind:String(row.kind) as MarketingKind,payload:JSON.parse(String(row.payload)),subscriber_id:String(row.subscriber_id),nonce:String(row.nonce)};
 }
 export function claimMarketing(sql:ShippingSql,token:string,now=Date.now()){

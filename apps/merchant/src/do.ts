@@ -1,3 +1,4 @@
+import {recoverCheckoutMarketing} from './lib/checkout-marketing';
 import {checkoutReadiness} from './lib/checkout-readiness';
 import {ShippingError} from './lib/smart-shipping';
 import {CHECKOUT_SCHEMA,checkoutInput,checkoutRead,checkoutSave,checkoutCommand,checkoutCancel,type CheckoutInput as RetailCheckoutInput} from './lib/checkout-core';
@@ -1437,7 +1438,8 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
   shoppingAiAllow(client:string){this.ensureInitialized();ensureSchemaObjects(this.sql,SHOPPING_SCHEMA);return this.ctx.storage.transactionSync(()=>allowShoppingAi(this.sql,client));}
   shoppingConsume(id:string,selection:ShoppingSelection,expiresAt:number){this.podInit();ensureSchemaObjects(this.sql,FEED_SCHEMA);ensureSchemaObjects(this.sql,SHOPPING_SCHEMA);return this.ctx.storage.transactionSync(()=>consumeShopping(this.sql,feedSnapshot(this.sql).offers,id,selection,expiresAt));}
   feedPut(sku:string,config:FeedOffer,storeUrl:string){this.podInit();ensureSchemaObjects(this.sql,FEED_SCHEMA);return this.ctx.storage.transactionSync(()=>putFeedOffer(this.sql,sku,config,storeUrl));}
-  marketingInit(){this.podInit();ensureSchemaObjects(this.sql,MARKETING_SCHEMA);ensureSchemaObjects(this.sql,EXPERIMENT_SCHEMA);}
+  marketingInit(){this.checkoutInit();ensureSchemaObjects(this.sql,MARKETING_SCHEMA);ensureSchemaObjects(this.sql,EXPERIMENT_SCHEMA);}
+  marketingRecoverCheckout(id:string,subscriberId:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>recoverCheckoutMarketing(this.sql,id,subscriberId));}
   marketingRfm(cursor:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>marketingRfm(this.sql,cursor));}
   marketingExperiment(raw:Parameters<typeof createExperiment>[1]){this.marketingInit();return this.ctx.storage.transactionSync(()=>createExperiment(this.sql,raw));}
   marketingExperimentReport(){this.marketingInit();return this.ctx.storage.transactionSync(()=>experimentReport(this.sql));}

@@ -1,3 +1,4 @@
+import {marketingToken} from '../src/lib/marketing-tokens';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync,writeFileSync,mkdirSync,rmSync} from 'node:fs';
@@ -10,7 +11,7 @@ test('ACP handoff uses schema-pinned requests, dedicated auth and one-use browse
  writeFileSync(main,`
  import original,{MerchantDO} from ${JSON.stringify(source)};export {MerchantDO};
  export default {async fetch(req,env,ctx){const path=new URL(req.url).pathname;if(!path.startsWith('/__test/'))return original.fetch(req,env,ctx);const db=env.MERCHANT.getByName('default');
- if(path==='/__test/sql'){const {query,params}=await req.json();return Response.json(await db.run(query,params));}
+ if(path==='/__test/sql'){await db.marketingInit();const {query,params}=await req.json();return Response.json(await db.run(query,params));}
  await db.run("INSERT INTO currencies(id,code,display_name,decimal_places) VALUES('usd','USD','Dollar',2)");
  await db.run("INSERT INTO products(id,title,status) VALUES('product','Shirt','active'),('draft','Hidden','draft')");
  await db.run("INSERT INTO variants(id,product_id,sku,title,price_cents,currency) VALUES('variant','product','SHIRT','Shirt',2500,'USD'),('hidden','draft','HIDDEN','Hidden',100,'USD')");
@@ -44,6 +45,10 @@ test('ACP handoff uses schema-pinned requests, dedicated auth and one-use browse
  assert.equal((await acp('/checkout_sessions/'+state.id,{buyer:{email:'forged@test.com'}},'update-after-claim')).status,409);
  const stateResponse=await acp('/checkout_sessions/'+state.id);assert.equal(stateResponse.status,200);const claimed=await stateResponse.json() as any;assert.equal(claimed.continue_url,undefined);
  assert.equal((await worker.fetch('http://localhost/v1/marketing/admin/overview',{headers:{Authorization:'Bearer '+'b'.repeat(40)}})).status,401);
+ const web=await worker.fetch('http://localhost/v1/checkouts',{method:'POST',headers:{Authorization:'Bearer '+'b'.repeat(40),'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID()},body:JSON.stringify({currency:'USD',line_items:[{id:'SHIRT',quantity:1}],buyer:{email:'recover@example.test'}})});assert.equal(web.status,201);const original=await web.json() as any;
+ const subscriber=crypto.randomUUID();await sql("INSERT INTO marketing_subscribers VALUES(?,?,'active','nonce',?,?,?)",[subscriber,'recover@example.test',Date.now(),Date.now(),Date.now()]);
+ const recoveryToken=await marketingToken({ORDER_TOKEN_SECRET:'s'.repeat(40),STORE_ID:'halifruit'},'recovery',subscriber,{scope:'checkout',checkout_id:original.id});
+ const recover=()=>request('/v1/marketing/recovery',{token:recoveryToken});const recovered=await recover();assert.equal(recovered.status,200);const recoveredData=await recovered.json() as any;assert.equal(recoveredData.scope,'checkout');assert.notEqual(recoveredData.checkout_id,original.id);assert.deepEqual(await (await recover()).json(),recoveredData);assert.ok(!JSON.stringify(recoveredData).includes('recover@example.test'));
  const out=process.env.ACP_CONTRACT_OUTPUT;if(out)writeFileSync(out,JSON.stringify({request:input,created:state,updated:after,claimed}));
 
  }finally{await worker?.stop();rmSync(dir,{recursive:true,force:true});}

@@ -45,6 +45,7 @@ export type Env = ShippingEnv & {
   MARKETING_AI_ENABLED?:string;
   MARKETING_AI_MODEL?:string;
   MARKETING_OPENAI_API_KEY?:string;
+  MARKETING_BFF_TOKEN?:string;
   MARKETING_ENABLED?:string;
   MARKETING_SEND_ENABLED?:string;
   MARKETING_POLICY_VERSION?:string;
@@ -312,6 +313,7 @@ export type DOStub = {
   shoppingConsume:(id:string,selection:import('./lib/shopping').ShoppingSelection,expiresAt:number)=>Promise<ReturnType<MerchantDO['shoppingConsume']>>;
   shoppingAiAllow:(client:string)=>Promise<boolean>;
   feedPut:(sku:string,config:import('./lib/product-feeds').FeedOffer,storeUrl:string)=>Promise<{saved:boolean}>;
+  marketingRecoverCheckout:(id:string,subscriberId:string)=>Promise<ReturnType<MerchantDO['checkoutGet']>>;
   marketingRfm:(cursor:string)=>Promise<ReturnType<MerchantDO["marketingRfm"]>>;
   marketingExperiment:(raw:Parameters<MerchantDO["marketingExperiment"]>[0])=>Promise<{id:string}>;
   marketingExperimentReport:()=>Promise<ReturnType<MerchantDO["marketingExperimentReport"]>>;
