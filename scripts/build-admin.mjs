@@ -1,3 +1,5 @@
+import {createRequire} from 'node:module';
+import path from 'node:path';
 import fs from 'node:fs';
 import {spawnSync} from 'node:child_process';
 const parsed=fs.existsSync('apps/merchant/secrets.json')?JSON.parse(fs.readFileSync('apps/merchant/secrets.json','utf8')):{};
@@ -7,5 +9,7 @@ env.API_BASE_URL ||= 'https://merchant.gofiber-phuongnguyen.workers.dev';
 env.STORE_URL ||= 'https://printerval.gofiber-phuongnguyen.workers.dev';env.STORE_NAME ||= 'KediMuse';
 const base=process.argv.slice(2).find(arg=>arg.startsWith('--base='))||'--base=/';
 if(!/^--base=\/[A-Za-z0-9_/-]*$/.test(base))throw Error('Invalid public base path');
-const result=spawnSync(process.execPath,['node_modules/vite/bin/vite.js','build',base],{cwd:'apps/client',env,stdio:'inherit'});
+const require=createRequire(new URL('../apps/client/package.json',import.meta.url));
+const vite=path.join(path.dirname(require.resolve('vite/package.json')),'bin/vite.js');
+const result=spawnSync(process.execPath,[vite,'build',base],{cwd:'apps/client',env,stdio:'inherit'});
 process.exit(result.status??1);
