@@ -20,6 +20,12 @@ kv = importlib.util.module_from_spec(kv_spec)
 kv_spec.loader.exec_module(kv)
 
 class DeploymentConfigTests(unittest.TestCase):
+    def test_jsonc_preserves_urls_comment_markers_and_escaped_quotes_in_strings(self):
+        original = {'vars': {'STORE_URL': 'https://store.test/a//b', 'VALUE': 'text "quoted" /* literal */ \\ end'}}
+        encoded = '// leading comment\n' + json.dumps(original) + '\n/* trailing comment */'
+        self.assertEqual(json.loads(generator.strip_jsonc_comments(encoded)), original)
+
+
     def test_ci_credentials_are_not_worker_secrets_but_ai_decryption_key_is_preserved(self):
         result = generator.runtime_secrets({
             'CLOUDFLARE_API_TOKEN': 'ci-only-fixture',
@@ -40,7 +46,7 @@ class DeploymentConfigTests(unittest.TestCase):
             base = root / 'base.json'
             env = root / 'settings.env'
             out = root / 'generated.json'
-            base.write_text(json.dumps({'name': 'test-worker', 'vars': {'PUBLIC_FLAG': 'false'}, 'kv_namespaces': [{'binding': 'KV_CACHE'}]}), encoding='utf-8')
+            base.write_text(json.dumps({'name': 'test-worker', 'vars': {'PUBLIC_FLAG': 'false', 'STORE_URL': 'https://store.test'}, 'kv_namespaces': [{'binding': 'KV_CACHE'}]}), encoding='utf-8')
             env.write_text('CLOUDFLARE_API_TOKEN=never-upload-this\nCLOUDFLARE_ACCOUNT_ID=account-id\nKV_CACHE_ID='+'a'*32+'\nCRYPTOKEN=runtime-key\nSTORE_NAME=KediMuse\nAUTH0_DOMAIN=\n', encoding='utf-8')
             run = subprocess.run([sys.executable, str(SCRIPT), '--skip-routes', str(env), str(base), str(out)], capture_output=True, text=True)
             self.assertEqual(run.returncode, 0, run.stderr)
@@ -48,7 +54,7 @@ class DeploymentConfigTests(unittest.TestCase):
             secrets = json.loads((root/'secrets.json').read_text(encoding='utf-8'))
             self.assertEqual(config['kv_namespaces'][0]['id'], 'a'*32)
             self.assertEqual(config['secrets']['required'], ['CRYPTOKEN', 'STORE_NAME'])
-            self.assertEqual(config['vars'], {'PUBLIC_FLAG': 'false'})
+            self.assertEqual(config['vars'], {'PUBLIC_FLAG': 'false', 'STORE_URL': 'https://store.test'})
             self.assertNotIn('never-upload-this', out.read_text(encoding='utf-8'))
             self.assertNotIn('never-upload-this', json.dumps(secrets))
             self.assertNotIn('never-upload-this', run.stdout+run.stderr)

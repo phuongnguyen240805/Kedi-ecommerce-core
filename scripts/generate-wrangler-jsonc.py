@@ -29,14 +29,9 @@ import sys
 
 
 def strip_jsonc_comments(text: str) -> str:
-    """Remove // line comments and /* block comments */ from a JSONC string."""
-    # Remove /* ... */ block comments (non-greedy, across newlines)
-    text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
-    # Remove // line comments (not inside strings)
-    # This simple approach removes everything from // to end-of-line;
-    # it is sufficient for wrangler.jsonc files which don't put // inside string values.
-    text = re.sub(r'//[^\n]*', '', text)
-    return text
+    """Strip comments while preserving quoted URLs and escaped string content."""
+    tokens = re.compile(r'"(?:\\.|[^"\\])*"|//[^\r\n]*|/\*[\s\S]*?\*/')
+    return tokens.sub(lambda match: match.group(0) if match.group(0).startswith('"') else ' ', text)
 
 # Deployment credentials configure CI only; do not grant them to deployed application code.
 CI_ONLY_KEYS = {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "KV_CACHE_ID", "CLOUDFLARE_USE_PAGE_DEV_DOMAIN"}
