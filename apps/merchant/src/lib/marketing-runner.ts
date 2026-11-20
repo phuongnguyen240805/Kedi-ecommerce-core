@@ -3,7 +3,7 @@ import {sendMailgunEmail} from '../mailgun';
 import {marketingToken} from './marketing-tokens';
 const escape=(v:string)=>v.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
 export async function deliverMarketing(env:Env,db:DOStub){
- if(env.MARKETING_ENABLED!=='true'||env.MARKETING_SEND_ENABLED!=='true'||!env.MAILGUN_API_KEY||!(env.MARKETING_MAILGUN_DOMAIN||env.MAILGUN_DOMAIN)||!env.MARKETING_FROM_EMAIL||!env.MARKETING_CONTACT_ADDRESS||!env.STORE_URL||!env.STORE_PUBLIC_API_URL||!env.ORDER_TOKEN_SECRET||env.ORDER_TOKEN_SECRET.length<32)return;
+ if(env.MARKETING_ENABLED!=='true'||env.MARKETING_SEND_ENABLED!=='true'||!env.MAILGUN_API_KEY||!env.MAILGUN_WEBHOOK_SIGNING_KEY||!env.STORE_NAME||!(env.MARKETING_MAILGUN_DOMAIN||env.MAILGUN_DOMAIN)||!env.MARKETING_FROM_EMAIL||!env.MARKETING_CONTACT_ADDRESS||!env.STORE_URL||!env.STORE_PUBLIC_API_URL||!env.ORDER_TOKEN_SECRET||env.ORDER_TOKEN_SECRET.length<32)return;
  const storefront=new URL(env.STORE_URL);if(storefront.protocol!=='https:')return;
  for(let count=0;count<10;count++){
   const lease=crypto.randomUUID(),job=await db.marketingClaim(lease);if(!job)return;
