@@ -24,7 +24,11 @@
     }
   ],
   "vars": {
-    "IMAGES_URL": ""
+    "IMAGES_URL": "",
+    "STORE_URL": "https://printerval.gofiber-phuongnguyen.workers.dev",
+    "CHECKOUT_ENABLED": "true",
+    "ACP_ENABLED": "false",
+    "ACP_ACCESS_VERIFIED": "false"
   },
   "triggers": {
     "crons": [

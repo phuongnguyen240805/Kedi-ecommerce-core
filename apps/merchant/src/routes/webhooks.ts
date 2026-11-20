@@ -82,6 +82,10 @@ webhooks.post('/stripe', async (c) => {
   ]);
   if (existing) return c.json({ ok: true });
 
+  if(event.type==='checkout.session.expired'){
+    const expired=event.data.object as Stripe.Checkout.Session;
+    if(expired.metadata?.ucp_checkout_session_id){await c.var.db.ucpPaymentExpire(expired.metadata.ucp_checkout_session_id,expired.id);return c.json({ok:true});}
+  }
   if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
     const webhookSession = event.data.object as Stripe.Checkout.Session;
     

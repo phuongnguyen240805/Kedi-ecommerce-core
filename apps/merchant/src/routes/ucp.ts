@@ -62,6 +62,11 @@ import {
 //
 // ============================================================
 
+async function assertLegacySession(db:Database,id:string){
+ const exists=await db.query("SELECT name FROM sqlite_master WHERE name='checkout_drafts'",[]);
+ if(exists.length&&(await db.query('SELECT id FROM checkout_drafts WHERE id=?',[id])).length)throw ApiError.forbidden('Use the authenticated merchant checkout for this session');
+}
+
 const UCP_VERSION = '2026-01-11';
 
 export const ucp = new OpenAPIHono<HonoEnv>();
@@ -566,6 +571,7 @@ ucp.openapi(routeGetCheckoutSession, async (c) => {
   const sessionId = c.req.param('id');
   const db = getDb(c.var.db);
   const baseUrl = storeApiBase(c.req.url, c.env);
+  await assertLegacySession(db,sessionId);
   
   const [session] = await db.query<any>(
     `SELECT * FROM ucp_checkout_sessions WHERE id = ?`,
@@ -648,6 +654,7 @@ ucp.openapi(routePutCheckoutSession, async (c) => {
   const body = c.req.valid('json');
   const db = getDb(c.var.db);
   const baseUrl = storeApiBase(c.req.url, c.env);
+  await assertLegacySession(db,sessionId);
   
   const [session] = await db.query<any>(
     `SELECT * FROM ucp_checkout_sessions WHERE id = ?`,
@@ -830,6 +837,7 @@ ucp.openapi(routePostComplete, async (c) => {
   
   const db = getDb(c.var.db);
   const baseUrl = storeApiBase(c.req.url, c.env);
+  await assertLegacySession(db,sessionId);
   
   const [session] = await db.query<any>(
     `SELECT * FROM ucp_checkout_sessions WHERE id = ?`,
@@ -916,6 +924,7 @@ ucp.openapi(routeDeleteCheckoutSession, async (c) => {
   const sessionId = c.req.param('id');
   const db = getDb(c.var.db);
   const baseUrl = storeApiBase(c.req.url, c.env);
+  await assertLegacySession(db,sessionId);
   
   const [session] = await db.query<any>(
     `SELECT * FROM ucp_checkout_sessions WHERE id = ?`,
@@ -977,6 +986,7 @@ ucp.openapi(routePatchCheckoutSession, async (c) => {
   const sessionId = c.req.param('id');
   const body = c.req.valid('json');
   const db = getDb(c.var.db);
+  await assertLegacySession(db,sessionId);
 
   const [session] = await db.query<any>(
     `SELECT * FROM ucp_checkout_sessions WHERE id = ?`, [sessionId]
@@ -1196,6 +1206,7 @@ ucp.openapi(routePostEstimateShipping, async (c) => {
   const countryCode: string = body.country_code;
 
   const db = getDb(c.var.db);
+  await assertLegacySession(db,sessionId);
 
   const [session]=await db.query<{id:string;currency:string;status:string;expires_at:string;line_items:string}>("SELECT id,currency,status,expires_at,line_items FROM ucp_checkout_sessions WHERE id=?",[sessionId]);
   if(!session)throw ApiError.notFound('Checkout session not found');

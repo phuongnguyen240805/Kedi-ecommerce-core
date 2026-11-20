@@ -17,6 +17,7 @@ export type StoreConfig = z.infer<typeof storeSchema>;
 
 // These values belong to a store, never to every customer of the Worker.
 const storeSettings = new Set([
+  'CHECKOUT_ENABLED','ACP_ENABLED','ACP_ACCESS_VERIFIED',
   'MARKETING_AI_ENABLED','MARKETING_AI_MODEL',
   'SHOPPING_ENABLED',
   'SHOPPING_AI_ENABLED','SHOPPING_AI_MODEL',
@@ -63,6 +64,7 @@ const storeSettings = new Set([
   'CUSTOMER_PASSWORD_AUTH_ENABLED',
 ]);
 const storeSecrets = new Set([
+  'ACP_API_TOKEN','CHECKOUT_BFF_TOKEN',
   'MARKETING_OPENAI_API_KEY',
   'SHOPPING_MCP_TOKEN',
   'SHOPPING_OPENAI_API_KEY',

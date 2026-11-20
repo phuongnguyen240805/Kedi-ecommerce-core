@@ -1,3 +1,5 @@
+import {acp} from './routes/acp';
+import {checkouts} from './routes/checkouts';
 /**
  * MIT License
  *
@@ -192,6 +194,8 @@ app.route('/v1/carrier-events',carrierEvents);
 app.route('/v1/commerce',commerce);
 app.route('/v1/commerce-service',commerceService);
 app.route('/v1/pod',pod);
+app.route('/v1/checkouts',checkouts);
+app.route('/acp',acp);
 app.route('/v1/marketing',marketing);
 app.route('/v1/feeds',feeds);
 app.route('/v1/shopping',shopping);

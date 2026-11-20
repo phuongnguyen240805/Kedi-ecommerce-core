@@ -1,0 +1,6 @@
+{
+  "url": "https://raw.githubusercontent.com/agentic-commerce-protocol/agentic-commerce-protocol/main/spec/2026-04-17/openapi/openapi.agentic_checkout.yaml",
+  "version": "2026-04-17",
+  "sha256": "2a0aa239b4aed50732461d9b7e443ad98d5c2d3431277899433ead07cbd4fc55",
+  "note": "Request/response schemas extracted verbatim from the versioned primary specification. Handoff-only subset; direct complete/payment unsupported."
+}

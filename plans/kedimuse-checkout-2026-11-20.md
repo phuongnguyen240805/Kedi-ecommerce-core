@@ -1,0 +1,19 @@
+# Shared checkout, ACP handoff and storefront integration — 2026-11-20
+
+## Phase 1: shared commerce / UCP
+
+Added an authenticated checkout service over the existing store Durable Object and UCP payment core. Prices, stock, destination currency, country tax rules and inclusive tax, delivery prices and shipping weight are resolved from merchant data. The buyer must select delivery and review the current quote. Updates use version checks and durable idempotency. Payment freezes the exact reviewed version/total and revalidates catalog and tax before a new Stripe request.
+
+Managed physical checkout now reserves its own stock before external Stripe I/O, persists recipient/address and selected shipping rate to the paid order, and consumes only its own reservation. A verified Stripe session.expired event releases those holds once. Legacy anonymous UCP routes cannot mutate or read these managed sessions. Existing unmanaged UCP sales paths remain supported.
+
+## Phase 4: ACP adapter (limited scope)
+
+Implemented authenticated, versioned create/read/update/cancel endpoints pinned to upstream 2026-04-17 request/response schemas. Continue URLs use an expiring, single-use browser handoff. Agent updates stop after browser ownership is claimed. Direct complete/delegated payment is explicitly unsupported. ACP_ENABLED and ACP_ACCESS_VERIFIED stay false in production until access/merchant onboarding is established. This is a handoff subset, not a declaration of complete ACP certification or OpenAI approval.
+
+## Validation
+
+Local backend gate: 161/161 tests passed, including actual local Workers + Durable Object HTTP tests, concurrent handoff claim, protocol authentication/version/idempotency, legacy-route bypass prevention, frozen quote checks, reservation/expiration and paid-order address persistence. Merchant TypeScript passed. Seven deployment configuration tests passed. A separate jsonschema gate validates the actual HTTP request plus three real responses against the checked-in upstream schemas, with negative controls. CI runs the same checks before deployment.
+
+## Remaining acceptance conditions
+
+Stripe sandbox keys/webhook are deferred by the owner; no real Stripe session or payment has been tested. Unknown Stripe creation results must be reconciled, not released by a local timeout. Some definite pre-session provider failures can leave a payment attempt/hold requiring reconciliation. Merchant prices, inventory, shipping regions/rates and tax policy need approved production configuration; tests do not certify tax compliance. No sample products or artificial prices were inserted into production. Full UCP/ACP conformance remains a separate acceptance gate. R2, MCP and POD artwork uploads remain deferred. Domestic POS/COD and international POD routing are unchanged.

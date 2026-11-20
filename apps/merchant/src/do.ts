@@ -1,3 +1,5 @@
+import {ShippingError} from './lib/smart-shipping';
+import {CHECKOUT_SCHEMA,checkoutInput,checkoutRead,checkoutSave,checkoutCommand,checkoutCancel,type CheckoutInput as RetailCheckoutInput} from './lib/checkout-core';
 import {EXPERIMENT_SCHEMA,createExperiment,marketingRfm,experimentReport} from './lib/marketing-admin';
 import * as shippingFlow from './lib/shipping-workflow';
 /**
@@ -26,7 +28,7 @@ import * as shippingFlow from './lib/shipping-workflow';
  */
 
 import { DurableObject } from 'cloudflare:workers';
-import { UCP_PAYMENT_SCHEMA, beginUcpPayment, attachUcpPayment, settleUcpPayment, type SettlementInput } from './lib/ucp-payment';
+import { UCP_PAYMENT_SCHEMA, beginUcpPayment, attachUcpPayment, expireUcpPayment, settleUcpPayment, type SettlementInput } from './lib/ucp-payment';
 import {POD_SCHEMA,approvePodArtwork,podQuotePlan,storePodQuote,checkoutPodQuote,claimPodFulfillment,finishPodFulfillment,type PodQuoteInput} from './lib/pod-core';
 import {MARKETING_SCHEMA,subscribeMarketing,confirmMarketing,unsubscribeMarketing,planMarketing,claimMarketing,marketingEligible,finishMarketing,recordMarketingEvent,type SubscriptionInput} from './lib/marketing-core';
 import {FEED_SCHEMA,feedSnapshot,putFeedOffer,type FeedOffer} from './lib/product-feeds';
@@ -1394,10 +1396,11 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
     return { changes: result.changes };
   }
 
-  ucpPaymentBegin(id: string, successUrl: string, cancelUrl: string) {
+  ucpPaymentBegin(id: string, successUrl: string, cancelUrl: string,expected?:{version:number;total:number}) {
     this.ensureInitialized(); ensureSchemaObjects(this.sql, UCP_PAYMENT_SCHEMA);
-    return this.ctx.storage.transactionSync(() => beginUcpPayment(this.sql, id, successUrl, cancelUrl));
+    return this.ctx.storage.transactionSync(() => beginUcpPayment(this.sql, id, successUrl, cancelUrl,Date.now(),expected));
   }
+  ucpPaymentExpire(id:string,stripeId:string){this.ensureInitialized();ensureSchemaObjects(this.sql,UCP_PAYMENT_SCHEMA);return this.ctx.storage.transactionSync(()=>expireUcpPayment(this.sql,id,stripeId));}
   ucpPaymentAttach(id: string, stripeId: string, url: string) {
     this.ensureInitialized(); ensureSchemaObjects(this.sql, UCP_PAYMENT_SCHEMA);
     return this.ctx.storage.transactionSync(() => attachUcpPayment(this.sql, id, stripeId, url));
@@ -1407,6 +1410,25 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
     ensureSchemaObjects(this.sql, POD_SCHEMA);
     return this.ctx.storage.transactionSync(() => settleUcpPayment(this.sql, input));
   }
+  checkoutRpc(command:import('./lib/checkout-core').CheckoutRpcCommand):import('./lib/checkout-core').CheckoutRpcResult{
+    try{let value:ReturnType<typeof checkoutRead>;switch(command.action){
+     case 'get':value=this.checkoutGet(command.id);break;
+     case 'create':value=this.checkoutCreate(command.input,command.source,command.key);break;
+     case 'update':value=this.checkoutUpdate(command.id,command.patch,command.source,command.key,command.version,command.browser);break;
+     case 'cancel':value=this.checkoutCancel(command.id,command.source,command.key);break;
+     case 'redeem':value=this.checkoutRedeem(command.id);break;
+     default:throw new ShippingError('unsupported_checkout_operation',400,'Unsupported checkout operation');
+    }return {ok:true,value};}catch(error){if(error instanceof ShippingError)return {ok:false,error:{code:error.code,status:error.status,message:error.message}};if(error instanceof Error&&error.name==='ZodError')return {ok:false,error:{code:'invalid_input',status:400,message:'Invalid checkout input'}};throw error;}
+  }
+  checkoutInit(){this.podInit();ensureSchemaObjects(this.sql,UCP_PAYMENT_SCHEMA);ensureSchemaObjects(this.sql,CHECKOUT_SCHEMA);}
+  checkoutGet(id:string){this.checkoutInit();return checkoutRead(this.sql,id);}
+  checkoutCreate(raw:RetailCheckoutInput,source:string,key:string){this.checkoutInit();const input=checkoutInput.parse(raw);return this.ctx.storage.transactionSync(()=>checkoutCommand(this.sql,source+':create',key,input,()=>checkoutSave(this.sql,input,source)));}
+  checkoutUpdate(id:string,patch:Partial<RetailCheckoutInput>,source:string,key:string,version?:number,browser=false){this.checkoutInit();return this.ctx.storage.transactionSync(()=>checkoutCommand(this.sql,source+':update:'+id,key,{patch,version:version??null,browser},()=>{
+    const current=checkoutRead(this.sql,id);if(current.source!==source||(!browser&&current.claimed)||(browser&&source!=='web'&&!current.claimed))throw new ShippingError('checkout_locked',409,'Continue this checkout in the merchant browser');
+    const [draft]=this.sql.exec('SELECT input_json FROM checkout_drafts WHERE id=?',id).toArray();return checkoutSave(this.sql,checkoutInput.parse({...JSON.parse(String(draft.input_json)),...patch}),source,id,version);
+  }));}
+  checkoutCancel(id:string,source:string,key:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>checkoutCommand(this.sql,source+':cancel:'+id,key,{},()=>checkoutCancel(this.sql,id,source)));}
+  checkoutRedeem(id:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>{const current=checkoutRead(this.sql,id);if(current.claimed||['expired','canceled','completed','complete_in_progress'].includes(current.status))throw new ShippingError('handoff_closed',409,'Handoff is no longer available');this.sql.exec('INSERT INTO checkout_handoffs VALUES(?,?,?)',id,id,Date.now());this.sql.exec('UPDATE checkout_drafts SET claimed=1 WHERE id=?',id);return checkoutRead(this.sql,id);});}
   podInit() { this.ensureInitialized(); ensureSchemaObjects(this.sql,POD_SCHEMA); }
   feedSnapshot(){this.podInit();ensureSchemaObjects(this.sql,FEED_SCHEMA);return this.ctx.storage.transactionSync(()=>feedSnapshot(this.sql));}
   shoppingAiAllow(client:string){this.ensureInitialized();ensureSchemaObjects(this.sql,SHOPPING_SCHEMA);return this.ctx.storage.transactionSync(()=>allowShoppingAi(this.sql,client));}

@@ -28,6 +28,11 @@ import type {ShippingEnv,ShippingCart,StoredShippingQuote} from './lib/smart-shi
 import type {ShippingSelection,ShippingResult} from './lib/shipping-store';
 
 export type Env = ShippingEnv & {
+  CHECKOUT_ENABLED?:string;
+  CHECKOUT_BFF_TOKEN?:string;
+  ACP_ENABLED?:string;
+  ACP_ACCESS_VERIFIED?:string;
+  ACP_API_TOKEN?:string;
   CARRIER_REGISTRY_JSON?:string;
   CARRIER_SECRETS_JSON?:string;
   SHIPPING_AUTOMATION_ENABLED?:string;
@@ -326,7 +331,14 @@ export type DOStub = {
   podCheckout: (cartId: string, quoteId: string, expected: number) => Promise<ReturnType<MerchantDO['podCheckout']>>;
   podClaim: (id:string,token:string) => Promise<ReturnType<MerchantDO['podClaim']>>;
   podFinish: (id:string,token:string,result:Parameters<MerchantDO['podFinish']>[2]) => Promise<void>;
-  ucpPaymentBegin: (id: string, successUrl: string, cancelUrl: string) => Promise<ReturnType<MerchantDO['ucpPaymentBegin']>>;
+  ucpPaymentBegin: (id: string, successUrl: string, cancelUrl: string,expected?:{version:number;total:number}) => Promise<ReturnType<MerchantDO['ucpPaymentBegin']>>;
+  checkoutRpc:(command:import('./lib/checkout-core').CheckoutRpcCommand)=>Promise<import('./lib/checkout-core').CheckoutRpcResult>;
+  checkoutGet:(id:string)=>Promise<ReturnType<MerchantDO['checkoutGet']>>;
+  checkoutCreate:(input:import('./lib/checkout-core').CheckoutInput,source:string,key:string)=>Promise<ReturnType<MerchantDO['checkoutGet']>>;
+  checkoutUpdate:(id:string,patch:Partial<import('./lib/checkout-core').CheckoutInput>,source:string,key:string,version?:number,browser?:boolean)=>Promise<ReturnType<MerchantDO['checkoutGet']>>;
+  checkoutCancel:(id:string,source:string,key:string)=>Promise<ReturnType<MerchantDO['checkoutGet']>>;
+  checkoutRedeem:(id:string)=>Promise<ReturnType<MerchantDO['checkoutGet']>>;
+  ucpPaymentExpire:(id:string,stripeId:string)=>Promise<{released:boolean}>;
   ucpPaymentAttach: (id: string, stripeId: string, url: string) => Promise<void>;
   ucpPaymentSettle: (input: import('./lib/ucp-payment').SettlementInput) => Promise<ReturnType<MerchantDO['ucpPaymentSettle']>>;
   commerceReplay:(input:import('./lib/commerce-core').CheckoutInput)=>Promise<ReturnType<MerchantDO['commerceReplay']>>;

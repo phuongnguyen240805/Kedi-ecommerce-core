@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
-import { UCP_PAYMENT_SCHEMA, beginUcpPayment, attachUcpPayment, settleUcpPayment, paymentSnapshot, checkoutReturnUrl } from '../src/lib/ucp-payment';
+import { UCP_PAYMENT_SCHEMA, beginUcpPayment, attachUcpPayment, settleUcpPayment, paymentSnapshot, checkoutReturnUrl,expireUcpPayment } from '../src/lib/ucp-payment';
 import type { ShippingSql } from '../src/lib/shipping-store';
 
 function fixture() {
@@ -92,4 +92,12 @@ test('another store database cannot settle a foreign payment, and return URL rej
 
 test('inventory lost since quote blocks a new Stripe attempt before I/O and leaves the checkout editable',()=>{
  const f=fixture();f.db.exec("UPDATE inventory SET reserved=9 WHERE sku='shirt'");assert.throws(()=>f.start(),/Stock changed/);assert.equal(f.db.prepare('SELECT COUNT(*) n FROM ucp_payment_attempts').get()!.n,0);assert.equal(f.db.prepare('SELECT status FROM ucp_checkout_sessions').get()!.status,'ready_for_complete');assert.equal(f.db.prepare('SELECT COUNT(*) n FROM orders').get()!.n,0);
+});
+
+test('payment holds prevent concurrent last-unit charges; only bound expiration releases once',()=>{
+ const f=fixture();f.db.exec("UPDATE inventory SET on_hand=4,reserved=2");f.start();assert.equal(f.db.prepare('SELECT reserved FROM inventory').get()!.reserved,4);
+ f.db.exec("INSERT INTO ucp_checkout_sessions SELECT 'second',status,currency,line_items,buyer,totals,messages,payment_instruments,stripe_session_id,order_id,order_number,expires_at,created_at,updated_at FROM ucp_checkout_sessions WHERE id='checkout'");
+ f.db.exec("UPDATE ucp_checkout_sessions SET status='ready_for_complete' WHERE id='second'");assert.throws(()=>f.tx(()=>beginUcpPayment(f.sql,'second','https://shop.test/ok','https://shop.test/cancel')),/Stock changed/);
+ attachUcpPayment(f.sql,'checkout','cs_test','https://checkout.stripe.com/test');assert.equal(f.tx(()=>expireUcpPayment(f.sql,'checkout','forged')).released,false);assert.equal(f.db.prepare('SELECT reserved FROM inventory').get()!.reserved,4);
+ f.tx(()=>expireUcpPayment(f.sql,'checkout','cs_test'));f.tx(()=>expireUcpPayment(f.sql,'checkout','cs_test'));assert.equal(f.db.prepare('SELECT reserved FROM inventory').get()!.reserved,2);
 });

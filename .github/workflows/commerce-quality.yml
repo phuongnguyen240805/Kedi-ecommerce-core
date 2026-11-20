@@ -18,5 +18,11 @@ jobs:
       - run: python3 -m unittest discover -s scripts -p test_generate_wrangler.py
       - run: npm run typecheck --workspace merchant
       - run: npm run test:phase5 --workspace merchant
+        env:
+          ACP_CONTRACT_OUTPUT: ${{ runner.temp }}/acp-contract-output.json
+      - name: Validate ACP HTTP responses against pinned specification
+        run: |
+          python3 -m pip install jsonschema==4.25.1
+          python3 scripts/test_acp_contract.py "${{ runner.temp }}/acp-contract-output.json"
       - run: npm run type-check --workspace client
       - run: npm run test:commerce:ui --workspace client
