@@ -98,6 +98,12 @@ jobs:
 
       - name: Append supported commerce settings safely
         env:
+          PANCAKE_API_KEY: ${{ secrets.PANCAKE_API_KEY }}
+          PANCAKE_SHOP_ID: ${{ vars.PANCAKE_SHOP_ID }}
+          PANCAKE_WAREHOUSE_ID: ${{ vars.PANCAKE_WAREHOUSE_ID }}
+          PANCAKE_CATALOG_SOURCE: ${{ vars.PANCAKE_CATALOG_SOURCE }}
+          PANCAKE_STOCK_ONLY: ${{ vars.PANCAKE_STOCK_ONLY }}
+          PANCAKE_SYNC_ENABLED: ${{ vars.PANCAKE_SYNC_ENABLED }}
           ACP_ENABLED: ${{ vars.ACP_ENABLED }}
           ACP_ACCESS_VERIFIED: ${{ vars.ACP_ACCESS_VERIFIED }}
           ACP_API_TOKEN: ${{ secrets.ACP_API_TOKEN }}

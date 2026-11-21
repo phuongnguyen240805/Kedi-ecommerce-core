@@ -94,3 +94,23 @@ export function applyPosSnapshot(sql:SyncSql,s:PancakeSnapshot){
  sql.exec(`UPDATE pancake_sync_state SET lease_token=NULL,lease_until=0,last_completed_at=?,warehouse_id=?,report_json=?,last_error=NULL WHERE shop_id=?`,timestamp,w.id,JSON.stringify(report),s.shopId);
  return report;
 }
+
+/** Stock-only POS refresh: preserve merchant prices, descriptions, type, status and reservations. */
+export function applyPosStock(sql:SyncSql,s:PancakeSnapshot){
+ const lease=sql.exec('SELECT lease_token,lease_until,warehouse_id FROM pancake_sync_state WHERE shop_id=?',s.shopId).toArray()[0];
+ if(lease?.lease_token!==s.token||Number(lease.lease_until)<Date.now())throw Error('Pancake sync lease expired');
+ if(lease.warehouse_id&&lease.warehouse_id!==s.warehouse.id)throw Error('Changing the sync warehouse requires inventory reconciliation');
+ const timestamp=new Date().toISOString(),w=s.warehouse;
+ const targets=s.variants.map(v=>{const row=sql.exec('SELECT id,sku,product_id,variant_type FROM variants WHERE id=?',v.id).toArray()[0];if(!row||row.sku!==v.sku||row.product_id!==v.productId||row.variant_type!=='physical')throw Error('POS stock must match an existing physical merchant variant');if(!Number.isSafeInteger(v.quantity)||v.quantity<0)throw Error('Invalid POS quantity');const foreign=sql.exec("SELECT shop_id FROM pancake_links WHERE kind='variation' AND target_id=? AND shop_id!=?",v.id,s.shopId).toArray();if(foreign.length)throw Error('Variant already managed by another POS shop');return v;});
+ if(new Set(targets.map(v=>v.sku)).size!==targets.length)throw Error('Duplicate POS SKU');
+ sql.exec("INSERT INTO warehouses(id,display_name,address_line1,city,postal_code,country_code,status) VALUES(?,?,?,'','','VN','active') ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,address_line1=excluded.address_line1",w.targetId,w.name,w.full_address||w.address||'');
+ for(const v of targets){const quantity=v.status==='active'?v.quantity:0;
+  sql.exec('INSERT INTO warehouse_inventory(id,sku,warehouse_id,on_hand,reserved,updated_at) VALUES(?,?,?,?,0,?) ON CONFLICT(sku,warehouse_id) DO UPDATE SET on_hand=excluded.on_hand,updated_at=excluded.updated_at',v.id,v.sku,w.targetId,quantity,timestamp);
+  sql.exec('INSERT INTO inventory(id,sku,on_hand,reserved,updated_at) VALUES(?,?,?,0,?) ON CONFLICT(sku) DO UPDATE SET on_hand=excluded.on_hand,updated_at=excluded.updated_at',v.id,v.sku,quantity,timestamp);
+  sql.exec("INSERT INTO pancake_links(shop_id,kind,source_id,target_id,source_sku,seen_token) VALUES(?,'variation',?,?,?,?) ON CONFLICT(shop_id,kind,source_id) DO UPDATE SET seen_token=excluded.seen_token",s.shopId,v.sourceId,v.id,v.sourceSku,s.token);
+ }
+ let retired=0;
+ if(s.full){const ids=new Set(targets.map(v=>v.id));for(const old of sql.exec("SELECT v.id,v.sku FROM pancake_links l JOIN variants v ON v.id=l.target_id WHERE l.shop_id=? AND l.kind='variation'",s.shopId).toArray()){if(ids.has(String(old.id)))continue;sql.exec('UPDATE inventory SET on_hand=0,updated_at=? WHERE sku=?',timestamp,String(old.sku));sql.exec('UPDATE warehouse_inventory SET on_hand=0,updated_at=? WHERE sku=? AND warehouse_id=?',timestamp,String(old.sku),w.targetId);retired++;}}
+ const report={shop_id:s.shopId,warehouse_id:w.id,stock_only:true,full:s.full,products:0,variants:targets.length,retired_variants:retired,warnings:{},completed_at:timestamp};
+ sql.exec('UPDATE pancake_sync_state SET lease_token=NULL,lease_until=0,last_completed_at=?,warehouse_id=?,report_json=?,last_error=NULL WHERE shop_id=?',timestamp,w.id,JSON.stringify(report),s.shopId);return report;
+}

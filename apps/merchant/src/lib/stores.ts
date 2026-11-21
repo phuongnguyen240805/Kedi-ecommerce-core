@@ -41,6 +41,7 @@ const storeSettings = new Set([
   'PANCAKE_GHN_ACCOUNT_ID',
   'PANCAKE_PAYMENT_MAPPING_VERIFIED',
   'STORE_URL',
+  'PANCAKE_STOCK_ONLY',
   'PANCAKE_SHOP_ID',
   'PANCAKE_WAREHOUSE_ID',
   'PANCAKE_SYNC_ENABLED',
@@ -120,6 +121,7 @@ export function storeRegistry(env: Env) {
     )
       throw ApiError.serviceUnavailable('Invalid POS variant type');
     for (const key of [
+      'PANCAKE_STOCK_ONLY',
       'PANCAKE_SYNC_ENABLED',
       'CUSTOMER_PASSWORD_AUTH_ENABLED',
       'SMART_SHIPPING_ENABLED',

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { normalizePos, readPos, posGet, getPosConfig, variationSchema, type PosVariation } from '../src/lib/pancake-source';
-import { acquirePosLease, applyPosSnapshot, PANCAKE_SCHEMA, type SyncSql } from '../src/lib/pancake-store';
+import { acquirePosLease, applyPosSnapshot, applyPosStock, PANCAKE_SCHEMA, type SyncSql } from '../src/lib/pancake-store';
 
 const warehouse={id:'warehouse-pos',name:'Hali Fruit',address:'Đà Nẵng',allow_create_order:true};
 const row:PosVariation=variationSchema.parse({id:'v1',product_id:'p1',display_id:'SKU-TAO',retail_price:129000,weight:500,
@@ -147,4 +147,10 @@ describe('digital POS catalogs',()=>{
    assert.notEqual(a.db.prepare('SELECT id FROM variants').get()?.id,b.db.prepare('SELECT id FROM variants').get()?.id);
   } finally {a.db.close();b.db.close();}
  });
+});
+
+
+describe('stock-only catalog adoption',()=>{
+ it('preserves merchant catalog and reservations while importing only the matched POS warehouse stock',async()=>{const {db,sql,apply}=memoryStore();acquirePosLease(sql,'1','initial');const first=await normalizePos('1',warehouse,[row],'initial');apply(first);const v=first.variants[0];db.prepare('UPDATE variants SET price_cents=777000,title=? WHERE id=?').run('Merchant title',v.id);db.prepare('UPDATE inventory SET reserved=3 WHERE sku=?').run(v.sku);db.prepare('UPDATE warehouse_inventory SET reserved=3 WHERE sku=?').run(v.sku);acquirePosLease(sql,'1','stock');const next=await normalizePos('1',warehouse,[{...row,retail_price:1,variations_warehouses:[{warehouse_id:warehouse.id,remain_quantity:8}]}],'stock');const result=applyPosStock(sql,next);assert.equal(result.stock_only,true);assert.equal(result.variants,1);assert.equal(db.prepare('SELECT price_cents FROM variants').get()?.price_cents,777000);assert.equal(db.prepare('SELECT title FROM variants').get()?.title,'Merchant title');assert.deepEqual({...db.prepare('SELECT on_hand,reserved FROM inventory').get()},{on_hand:8,reserved:3});assert.deepEqual({...db.prepare('SELECT on_hand,reserved FROM warehouse_inventory').get()},{on_hand:8,reserved:3});acquirePosLease(sql,'1','retry');applyPosStock(sql,{...next,token:'retry'});assert.equal(db.prepare('SELECT count(*) n FROM variants').get()?.n,1);assert.equal(db.prepare('SELECT reserved FROM inventory').get()?.reserved,3);db.close();});
+ it('rejects unmatched or renamed variants and warehouse switching before inventory writes',async()=>{const {db,sql,apply}=memoryStore();acquirePosLease(sql,'1','initial');const first=await normalizePos('1',warehouse,[row],'initial');apply(first);acquirePosLease(sql,'1','stock');for(const changed of [{...first,token:'stock',variants:[{...first.variants[0],id:'unmapped'}]},{...first,token:'stock',variants:[{...first.variants[0],sku:'wrong'}]},{...first,token:'stock',warehouse:{...first.warehouse,id:'other'}}])assert.throws(()=>applyPosStock(sql,changed));assert.equal(db.prepare('SELECT on_hand FROM inventory').get()?.on_hand,10);db.close();});
 });

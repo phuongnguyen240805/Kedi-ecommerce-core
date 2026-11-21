@@ -39,7 +39,7 @@ import {FEED_SCHEMA,feedSnapshot,putFeedOffer,type FeedOffer} from './lib/produc
 import {SHOPPING_SCHEMA,consumeShopping,allowShoppingAi,type ShoppingSelection} from './lib/shopping';
 import { STOREFRONT_CONTENT_SCHEMA } from './lib/storefront-content';
 import { CUSTOMER_SESSION_SCHEMA } from './lib/customer-sessions';
-import { PANCAKE_SCHEMA, acquirePosLease, applyPosSnapshot, finishPosError } from './lib/pancake-store';
+import { PANCAKE_SCHEMA, acquirePosLease, applyPosSnapshot, applyPosStock, finishPosError } from './lib/pancake-store';
 import type { PancakeSnapshot } from './lib/pancake-source';
 import { INTEGRATION_SCHEMA, integrationState, type StateCommand } from './integrations/ctxlayer/store';
 import { beginMcpRun, commitMcpRun, failMcpRun, type RunContext } from './integrations/pancake/sync-runs';
@@ -1606,6 +1606,8 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
   selectShippingQuote(cartId:string,quoteId:string,optionId:string,policyKey:string) {this.ensureShippingStorage();return this.ctx.storage.transactionSync(()=>shippingResult(()=>selectShippingQuote(this.sql,cartId,quoteId,optionId,policyKey)));}
   shippingSelection(cartId:string,policyKey?:string) {if(!this.hasShippingSelectionStorage())return shippingResult(()=>null);return this.ctx.storage.transactionSync(()=>shippingResult(()=>readShippingSelection(this.sql,cartId,policyKey)));}
   clearShippingSelection(cartId:string) {if(!this.hasShippingSelectionStorage())return shippingResult(()=>undefined);return this.ctx.storage.transactionSync(()=>shippingResult(()=>clearShippingSelection(this.sql,cartId)));}
+
+  applyPancakeStock(snapshot: PancakeSnapshot) {this.ensureInitialized();return this.ctx.storage.transactionSync(()=>applyPosStock(this.sql,snapshot));}
 
   applyPancakeSync(snapshot: PancakeSnapshot) {
     this.ensureInitialized();

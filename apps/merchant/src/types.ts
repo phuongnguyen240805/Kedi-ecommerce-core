@@ -94,6 +94,7 @@ export type Env = ShippingEnv & {
   /** Optional secret protecting first-time API key initialization on public deployments. */
   SETUP_INIT_TOKEN?: string;
   PANCAKE_BASE_URL?: string;
+  PANCAKE_STOCK_ONLY?: string;
   PANCAKE_SHOP_ID?: string;
   PANCAKE_API_KEY?: string;
   PANCAKE_WAREHOUSE_ID?: string;

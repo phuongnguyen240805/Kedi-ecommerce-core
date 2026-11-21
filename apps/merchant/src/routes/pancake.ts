@@ -15,7 +15,7 @@ app.openapi(createRoute({method:'get',path:'/status',tags:['Pancake'],security:[
   const integration=source==='ctxlayer_mcp'?(await integrationStub(c.env).ctxlayerState({op:'get'})).connection:null;
   let mcpConfigured=false;try{mcpConfigured=Boolean(integration?.status==='connected'&&integration.config===integrationConfig(c.env).fingerprint);}catch{}
   const [state]=await c.var.db.query<Record<string,unknown>>('SELECT last_attempt_at,last_completed_at,last_error,warehouse_id,report_json,lease_until FROM pancake_sync_state WHERE shop_id=?',[shopId]);
-  return c.json({source,connection_status:integration?.status||null,configured:source==='ctxlayer_mcp'?mcpConfigured:Boolean(c.env.PANCAKE_API_KEY&&shopId&&c.env.PANCAKE_WAREHOUSE_ID),shop_id:shopId,
+  return c.json({stock_only:c.env.PANCAKE_STOCK_ONLY==='true',source,connection_status:integration?.status||null,configured:source==='ctxlayer_mcp'?mcpConfigured:Boolean(c.env.PANCAKE_API_KEY&&shopId&&c.env.PANCAKE_WAREHOUSE_ID),shop_id:shopId,
     warehouse_id:c.env.PANCAKE_WAREHOUSE_ID||null,scheduled:c.env.PANCAKE_SYNC_ENABLED==='true',
     running:Number(state?.lease_until||0)>Date.now(),last_attempt_at:state?.last_attempt_at||null,
     last_completed_at:state?.last_completed_at||null,last_error:state?.last_error||null,

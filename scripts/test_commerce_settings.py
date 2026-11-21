@@ -15,4 +15,11 @@ class CommerceSettingsTests(unittest.TestCase):
    for bad in [{'MARKETING_ENABLED':'yes'},{'CHECKOUT_PAYMENTS_PAUSED':'yes'},{'ACP_ACCESS_VERIFIED':'yes'},{'MARKETING_POLICY_VERSION':'x\nINJECTED=1'}]:
     with self.assertRaises(ValueError):settings.append_settings(p,bad)
     self.assertEqual(p.read_text(),'original')
+ def test_pancake_settings_and_secret_are_imported_without_shell_interpolation(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   p=Path(tmp)/'settings.env'
+   values={'PANCAKE_SHOP_ID':'715160501','PANCAKE_WAREHOUSE_ID':'warehouse','PANCAKE_API_KEY':'fixture_private_literal','PANCAKE_STOCK_ONLY':'true','PANCAKE_SYNC_ENABLED':'false'}
+   self.assertEqual(settings.append_settings(p,values),5)
+   self.assertIn('PANCAKE_STOCK_ONLY=true',p.read_text())
+   with self.assertRaises(ValueError):settings.append_settings(p,{'PANCAKE_STOCK_ONLY':'yes'})
 if __name__=='__main__':unittest.main()

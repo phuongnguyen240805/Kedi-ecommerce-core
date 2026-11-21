@@ -31,7 +31,7 @@ export async function syncPancake(env:Env, options:{limitProducts?:number;trigge
     const selected=options.limitProducts?new Set([...new Set(source.variations.map(v=>v.product_id))].slice(0,options.limitProducts)):null;
     const variations=selected?source.variations.filter(v=>selected.has(v.product_id)):source.variations;
     const snapshot=await normalizePos(source.shopId,source.warehouse,variations,token,!selected,env.PANCAKE_VARIANT_TYPE || 'physical');
-    const report=await stub.applyPancakeSync(snapshot);
+    const report=env.PANCAKE_STOCK_ONLY==='true'?await stub.applyPancakeStock(snapshot):await stub.applyPancakeSync(snapshot);
     try{await purgePosCatalogCache(env.KV_CACHE);}catch{
       // The database commit remains successful; report cache degradation separately.
       return {...report,cache_invalidated:false};

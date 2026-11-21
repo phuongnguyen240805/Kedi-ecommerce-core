@@ -155,7 +155,7 @@ const createCart = createRoute({
 });
 
 adminApp.openapi(createCart, async (c) => {
-  const { customer_email, region_id, locale } = c.req.valid('json');
+  const { customer_email, region_id, locale, currency: requestedCurrency } = c.req.valid('json');
 
   if (!isValidEmail(customer_email)) {
     throw ApiError.invalidRequest('A valid customer_email is required');
@@ -165,7 +165,8 @@ adminApp.openapi(createCart, async (c) => {
   const id = uuid();
   const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
 
-  let currency = 'USD';
+  let currency = requestedCurrency || 'USD';
+  if(requestedCurrency){const [configured]=await db.query("SELECT id FROM currencies WHERE code=? AND status='active'",[requestedCurrency]);if(!configured)throw ApiError.invalidRequest('Cart currency is not configured');}
   let resolvedRegionId = region_id || null;
 
   // If region_id provided, validate and get currency
@@ -177,6 +178,7 @@ adminApp.openapi(createCart, async (c) => {
       [region_id]
     );
     if (!region) throw ApiError.notFound('Region not found or inactive');
+    if(requestedCurrency&&requestedCurrency!==region.currency_code)throw ApiError.invalidRequest('Currency does not match region');
     currency = region.currency_code;
   } else {
     // Try to get default region
@@ -1284,3 +1286,4 @@ adminApp.openapi(selectShippingRate, async (c) => {
 });
 
 export { adminApp as adminCheckout };
+

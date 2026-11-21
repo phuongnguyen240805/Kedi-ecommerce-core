@@ -371,6 +371,7 @@ export const CartResponse = z.object({
 
 /** Request body for POST /v1/carts. */
 export const CreateCartBody = z.object({
+  currency: z.string().regex(/^[A-Z]{3}$/).optional(),
   customer_email: z.string().email().openapi({ example: 'customer@example.com' }),
   locale: z.string().optional().openapi({ example: 'fr-FR', description: 'User preferred language for localized strings' }),
   region_id: z.string().uuid().optional().openapi({ example: '550e8400-e29b-41d4-a716-446655440000', description: 'Optional region for this cart' }),
