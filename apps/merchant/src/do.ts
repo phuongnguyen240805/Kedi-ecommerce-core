@@ -1,3 +1,4 @@
+import {ensureCartItemCurrency} from './lib/cart-schema';
 import {STOREFRONT_MIGRATION_SCHEMA,importStorefrontCatalog,provisionStorefrontAccess} from './lib/storefront-migration';
 import {beginBankPayment,verifyBankPayment,closeBankPayment} from './lib/checkout-payments';
 import {recoverCheckoutMarketing} from './lib/checkout-marketing';
@@ -1323,6 +1324,9 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
     } catch {
       // If table doesn't exist yet or sqlite doesn't support the operation, ignore.
     }
+
+    // Run outside the legacy best-effort migration catch: failed upgrades must retry.
+    this.ctx.storage.transactionSync(() => ensureCartItemCurrency(this.sql));
 
     this.initialized = true;
   }
