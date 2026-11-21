@@ -98,6 +98,17 @@ jobs:
 
       - name: Append supported commerce settings safely
         env:
+          CHECKOUT_CARRIER_ENABLED: ${{ vars.CHECKOUT_CARRIER_ENABLED }}
+          SMART_SHIPPING_ENABLED: ${{ vars.SMART_SHIPPING_ENABLED }}
+          SMART_SHIPPING_POLICY: ${{ vars.SMART_SHIPPING_POLICY }}
+          GHN_TOKEN: ${{ secrets.GHN_TOKEN }}
+          GHN_SHOP_ID: ${{ vars.GHN_SHOP_ID }}
+          GHN_FROM_DISTRICT_ID: ${{ vars.GHN_FROM_DISTRICT_ID }}
+          GHN_FROM_WARD_CODE: ${{ vars.GHN_FROM_WARD_CODE }}
+          GHN_ENVIRONMENT: ${{ vars.GHN_ENVIRONMENT }}
+          PANCAKE_GHN_ACCOUNT_ID: ${{ vars.PANCAKE_GHN_ACCOUNT_ID }}
+          CARRIER_REGISTRY_JSON: ${{ vars.CARRIER_REGISTRY_JSON }}
+          CARRIER_SECRETS_JSON: ${{ secrets.CARRIER_SECRETS_JSON }}
           PANCAKE_API_KEY: ${{ secrets.PANCAKE_API_KEY }}
           PANCAKE_SHOP_ID: ${{ vars.PANCAKE_SHOP_ID }}
           PANCAKE_WAREHOUSE_ID: ${{ vars.PANCAKE_WAREHOUSE_ID }}

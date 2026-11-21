@@ -1,6 +1,7 @@
 import {STOREFRONT_MIGRATION_SCHEMA,importStorefrontCatalog,provisionStorefrontAccess} from './lib/storefront-migration';
 import {beginBankPayment,verifyBankPayment,closeBankPayment} from './lib/checkout-payments';
 import {recoverCheckoutMarketing} from './lib/checkout-marketing';
+import {saveCheckoutCarrier} from './lib/checkout-carrier';
 import {checkoutReadiness} from './lib/checkout-readiness';
 import {ShippingError} from './lib/smart-shipping';
 import {CHECKOUT_SCHEMA,checkoutInput,checkoutRead,checkoutSave,checkoutCommand,checkoutCancel,type CheckoutInput as RetailCheckoutInput} from './lib/checkout-core';
@@ -1431,7 +1432,8 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
   storefrontAccess(input:Parameters<typeof provisionStorefrontAccess>[1]){this.ensureInitialized();return this.ctx.storage.transactionSync(()=>provisionStorefrontAccess(this.sql,input));}
   checkoutInit(){this.podInit();ensureSchemaObjects(this.sql,UCP_PAYMENT_SCHEMA);ensureSchemaObjects(this.sql,CHECKOUT_SCHEMA);}
   checkoutReconcileAllow(id:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>{const now=Date.now(),[row]=this.sql.exec('SELECT next_at FROM checkout_reconcile_rates WHERE id=?',id).toArray();if(row&&Number(row.next_at)>now)return false;this.sql.exec('INSERT INTO checkout_reconcile_rates VALUES(?,?) ON CONFLICT(id) DO UPDATE SET next_at=excluded.next_at',id,now+10000);return true;});}
-  checkoutReadiness(cursor:string,skus?:string[]){this.checkoutInit();return checkoutReadiness(this.sql,cursor,skus);}
+  checkoutReadiness(cursor:string,skus?:string[],carrierCountry?:string){this.checkoutInit();return checkoutReadiness(this.sql,cursor,skus,carrierCountry);}
+  checkoutCarrierSave(id:string,quoteId:string,version:number,options:Parameters<typeof saveCheckoutCarrier>[4],context:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>saveCheckoutCarrier(this.sql,id,quoteId,version,options,context));}
   checkoutGet(id:string){this.checkoutInit();return checkoutRead(this.sql,id);}
   checkoutCreate(raw:RetailCheckoutInput,source:string,key:string){this.checkoutInit();const input=checkoutInput.parse(raw);return this.ctx.storage.transactionSync(()=>checkoutCommand(this.sql,source+':create',key,input,()=>checkoutSave(this.sql,input,source)));}
   checkoutUpdate(id:string,patch:Partial<RetailCheckoutInput>,source:string,key:string,version?:number,browser=false){this.checkoutInit();return this.ctx.storage.transactionSync(()=>checkoutCommand(this.sql,source+':update:'+id,key,{patch,version:version??null,browser},()=>{

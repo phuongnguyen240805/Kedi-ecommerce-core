@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {readCheckoutCarrier} from './checkout-carrier';
 import type {ShippingSql} from './shipping-store';
 import {ShippingError} from './smart-shipping';
 export const CHECKOUT_SCHEMA=`
@@ -6,11 +7,12 @@ CREATE TABLE IF NOT EXISTS checkout_drafts(id TEXT PRIMARY KEY,source TEXT NOT N
 CREATE TABLE IF NOT EXISTS checkout_idempotency(scope TEXT NOT NULL,key TEXT NOT NULL,request_json TEXT NOT NULL,response_json TEXT NOT NULL,PRIMARY KEY(scope,key));
 CREATE TABLE IF NOT EXISTS checkout_reconcile_rates(id TEXT PRIMARY KEY,next_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS checkout_recoveries(original_id TEXT PRIMARY KEY,checkout_id TEXT NOT NULL UNIQUE);
+CREATE TABLE IF NOT EXISTS checkout_carrier_quotes(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,binding_json TEXT NOT NULL,options_json TEXT NOT NULL,context TEXT NOT NULL,expires_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS checkout_handoffs(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,created_at INTEGER NOT NULL);
 `;
 const money=z.number().int().nonnegative().max(1_000_000_000);
-export const checkoutAddress=z.object({name:z.string().trim().min(2).max(100),phone:z.string().max(30).default(''),line_one:z.string().trim().min(5).max(300),line_two:z.string().max(200).default(''),city:z.string().trim().min(1).max(100),state:z.string().max(100).default(''),country:z.string().regex(/^[A-Z]{2}$/),postal_code:z.string().trim().min(1).max(30)}).strict();
-export const checkoutInput=z.object({currency:z.string().regex(/^[A-Za-z]{3}$/).transform(v=>v.toUpperCase()),line_items:z.array(z.object({id:z.string().min(1).max(200),quantity:z.number().int().min(1).max(99)}).strict()).min(1).max(50),buyer:z.object({email:z.string().trim().email().max(254)}).strict().optional(),address:checkoutAddress.optional(),shipping_option_id:z.string().max(100).optional()}).strict();
+export const checkoutAddress=z.object({province_id:z.number().int().positive().optional(),district_id:z.number().int().positive().optional(),ward_code:z.string().regex(/^[A-Za-z0-9]{1,12}$/).optional(),name:z.string().trim().min(2).max(100),phone:z.string().max(30).default(''),line_one:z.string().trim().min(5).max(300),line_two:z.string().max(200).default(''),city:z.string().trim().min(1).max(100),state:z.string().max(100).default(''),country:z.string().regex(/^[A-Z]{2}$/),postal_code:z.string().trim().min(1).max(30)}).strict();
+export const checkoutInput=z.object({currency:z.string().regex(/^[A-Za-z]{3}$/).transform(v=>v.toUpperCase()),line_items:z.array(z.object({id:z.string().min(1).max(200),quantity:z.number().int().min(1).max(99)}).strict()).min(1).max(50),buyer:z.object({email:z.string().trim().email().max(254)}).strict().optional(),address:checkoutAddress.optional(),carrier_quote_id:z.string().uuid().nullable().optional(),shipping_option_id:z.string().max(100).optional()}).strict();
 export type CheckoutInput=z.infer<typeof checkoutInput>;
 export type CheckoutSnapshot=ReturnType<typeof quoteCheckout>;
 const fail=(code:string,message:string,status=409):never=>{throw new ShippingError(code,status,message);};
@@ -21,7 +23,7 @@ export function taxRate(sql:ShippingSql,country:string|undefined,code:string|nul
  if(!rates.length)fail('tax_policy_missing','The merchant must configure an explicit tax rule, including a zero-rate rule when applicable');
  const rate=Number(rates[0].rate_percentage);if(!Number.isFinite(rate)||rate<0||rate>100)fail('invalid_tax_policy','Invalid tax policy');return rate;
 }
-export function quoteCheckout(sql:ShippingSql,raw:CheckoutInput){
+export function quoteCheckout(sql:ShippingSql,raw:CheckoutInput,owner?:string){
  const input=checkoutInput.parse(raw),[currency]=sql.exec("SELECT id FROM currencies WHERE code=? AND status='active'",input.currency).toArray();if(!currency)fail('currency_unavailable','Currency is not configured',400);
  const regions=input.address?sql.exec("SELECT DISTINCT r.id,r.tax_inclusive FROM regions r JOIN region_countries rc ON rc.region_id=r.id JOIN countries c ON c.id=rc.country_id WHERE r.status='active' AND c.status='active' AND c.code=? AND r.currency_id=? ORDER BY r.id",input.address.country,currency.id).toArray():[];
  if(new Set(regions.map(r=>r.tax_inclusive)).size>1)fail('tax_policy_ambiguous','Destination has conflicting tax policies');
@@ -43,6 +45,8 @@ export function quoteCheckout(sql:ShippingSql,raw:CheckoutInput){
  if(physical&&input.address&&!regions.length)messages.push({code:'destination_unavailable',content:'This destination is not configured for this currency'});
  const rates=physical&&input.address&&regions.length&&!messages.some(m=>['weight_missing','shipping_context_required'].includes(m.code))?sql.exec("SELECT DISTINCT sr.id,sr.display_name,sr.tax_code,sr.tax_inclusive,sp.amount_cents,sr.max_delivery_days FROM shipping_rates sr JOIN region_shipping_rates rs ON rs.shipping_rate_id=sr.id JOIN regions r ON r.id=rs.region_id JOIN region_countries rc ON rc.region_id=r.id JOIN countries c ON c.id=rc.country_id JOIN shipping_rate_prices sp ON sp.shipping_rate_id=sr.id AND sp.currency_id=r.currency_id WHERE sr.status='active' AND r.status='active' AND c.status='active' AND c.code=? AND r.currency_id=? AND sr.shipping_class_id IS NULL AND (sr.max_weight_g IS NULL OR sr.max_weight_g>=?) ORDER BY sr.id",input.address.country,currency.id,weight).toArray():[];
  const options=rates.map(r=>{const price=money.parse(r.amount_cents),rate=taxRate(sql,input.address?.country,r.tax_code as string|null),net=r.tax_inclusive===1?Math.round(price/(1+rate/100)):price,tax=r.tax_inclusive===1?price-net:Math.round(net*rate/100);return {id:String(r.id),title:String(r.display_name),amount:net+tax,shipping:net,tax,currency:input.currency,estimated_days:r.max_delivery_days as number|null};});
+ if(input.carrier_quote_id&&taxRate(sql,input.address?.country,null)!==0)fail('carrier_tax_policy_unsupported','Carrier checkout requires the explicitly configured shipping tax policy');
+ options.push(...readCheckoutCarrier(sql,input,lines,owner));
  const selected=options.find(o=>o.id===input.shipping_option_id);if(physical&&!selected)messages.push({code:'shipping_required',content:options.length?'Choose a delivery option':'No delivery option is currently available'});
  const shipping=physical&&selected?selected.shipping:0;tax+=physical&&selected?selected.tax:0;money.parse(subtotal);money.parse(tax);const total=money.parse(subtotal+tax+shipping);
  if(total<=0)fail('invalid_total','Checkout total must be positive',400);
@@ -57,7 +61,7 @@ export function checkoutRead(sql:ShippingSql,id:string){
 export function checkoutSave(sql:ShippingSql,raw:CheckoutInput,source:string,id:string=crypto.randomUUID(),expectedVersion?:number){
  const [old]=sql.exec('SELECT d.*,s.status,s.expires_at FROM checkout_drafts d JOIN ucp_checkout_sessions s ON s.id=d.id WHERE d.id=?',id).toArray();
  if(old){if(old.source!==source)fail('checkout_not_found','Checkout not found',404);if(['complete_in_progress','completed','canceled'].includes(String(old.status))||Date.parse(String(old.expires_at))<=Date.now())fail('checkout_closed','Checkout is closed');if(expectedVersion!==undefined&&Number(old.version)!==expectedVersion)fail('checkout_changed','Checkout changed; reload before updating');}
- const input=checkoutInput.parse(raw),snapshot=quoteCheckout(sql,input),expires=old?String(old.expires_at):new Date(Date.now()+3600000).toISOString(),time=new Date().toISOString();
+ const input=checkoutInput.parse(raw),snapshot=quoteCheckout(sql,input,id),expires=old?String(old.expires_at):new Date(Date.now()+3600000).toISOString(),time=new Date().toISOString();
  const lines=snapshot.line_items.map(i=>({id:i.id,item:{id:i.sku,title:i.title},quantity:i.quantity,unit_price:{amount:i.unit_price,currency:input.currency},total_price:{amount:i.subtotal,currency:input.currency}}));
  const totals=[{type:'subtotal',amount:snapshot.subtotal,currency:input.currency},{type:'tax',amount:snapshot.tax,currency:input.currency},{type:'shipping',amount:snapshot.shipping,currency:input.currency},{type:'grand_total',amount:snapshot.total,currency:input.currency}];
  sql.exec("INSERT INTO ucp_checkout_sessions(id,status,currency,line_items,buyer,totals,messages,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,currency=excluded.currency,line_items=excluded.line_items,buyer=excluded.buyer,totals=excluded.totals,messages=excluded.messages,updated_at=excluded.updated_at",id,snapshot.status,input.currency,JSON.stringify(lines),JSON.stringify(input.buyer||null),JSON.stringify(totals),JSON.stringify(snapshot.messages),expires,time,time);

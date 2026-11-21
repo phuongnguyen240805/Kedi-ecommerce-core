@@ -94,6 +94,7 @@ export type Env = ShippingEnv & {
   /** Optional secret protecting first-time API key initialization on public deployments. */
   SETUP_INIT_TOKEN?: string;
   PANCAKE_BASE_URL?: string;
+  CHECKOUT_CARRIER_ENABLED?: string;
   PANCAKE_STOCK_ONLY?: string;
   PANCAKE_SHOP_ID?: string;
   PANCAKE_API_KEY?: string;
@@ -346,7 +347,8 @@ export type DOStub = {
   storefrontAccess:(...args:Parameters<MerchantDO['storefrontAccess']>)=>Promise<ReturnType<MerchantDO['storefrontAccess']>>;
   checkoutRpc:(command:import('./lib/checkout-core').CheckoutRpcCommand)=>Promise<import('./lib/checkout-core').CheckoutRpcResult>;
   checkoutReconcileAllow:(id:string)=>Promise<boolean>;
-  checkoutReadiness:(cursor:string,skus?:string[])=>Promise<ReturnType<MerchantDO['checkoutReadiness']>>;
+  checkoutCarrierSave:(...args:Parameters<MerchantDO['checkoutCarrierSave']>)=>Promise<ReturnType<MerchantDO['checkoutCarrierSave']>>;
+  checkoutReadiness:(cursor:string,skus?:string[],carrierCountry?:string)=>Promise<ReturnType<MerchantDO['checkoutReadiness']>>;
   checkoutGet:(id:string)=>Promise<ReturnType<MerchantDO['checkoutGet']>>;
   checkoutCreate:(input:import('./lib/checkout-core').CheckoutInput,source:string,key:string)=>Promise<ReturnType<MerchantDO['checkoutGet']>>;
   checkoutUpdate:(id:string,patch:Partial<import('./lib/checkout-core').CheckoutInput>,source:string,key:string,version?:number,browser?:boolean)=>Promise<ReturnType<MerchantDO['checkoutGet']>>;
