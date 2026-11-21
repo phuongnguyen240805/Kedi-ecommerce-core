@@ -252,7 +252,7 @@ adminApp.openapi(addCartItems, async (c) => {
   if (cart.status !== 'open') throw ApiError.conflict('Cart is not open');
 
   // Resolve currency_id from cart's region
-  const currencyId = await getCurrencyIdForRegion(db, cart.region_id);
+  const currencyId = cart.region_id?await getCurrencyIdForRegion(db,cart.region_id):(await db.query<{id:string}>("SELECT id FROM currencies WHERE code=? AND status='active'",[cart.currency]))[0]?.id;
   if (!currencyId) {
     throw ApiError.invalidRequest(
       'Cart region has no currency configured. Unable to resolve prices.'
@@ -1286,4 +1286,3 @@ adminApp.openapi(selectShippingRate, async (c) => {
 });
 
 export { adminApp as adminCheckout };
-
