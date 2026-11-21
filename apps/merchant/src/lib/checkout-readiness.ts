@@ -1,7 +1,7 @@
 import {taxRate} from './checkout-core';
 import type {ShippingSql} from './shipping-store';
-export function checkoutReadiness(sql:ShippingSql,cursor=''){
- const rows=sql.exec(`SELECT v.id,v.sku,v.status,v.requires_shipping,v.weight_g,v.shipping_class_id,v.tax_code,p.shipping_class_id product_shipping_class,p.status product_status,COALESCE(i.on_hand-i.reserved,0) available FROM variants v JOIN products p ON p.id=v.product_id LEFT JOIN inventory i ON i.sku=v.sku WHERE v.id>? ORDER BY v.id LIMIT 101`,cursor).toArray();
+export function checkoutReadiness(sql:ShippingSql,cursor='',skus?:string[]){
+ const rows=sql.exec(`SELECT v.id,v.sku,v.status,v.requires_shipping,v.weight_g,v.shipping_class_id,v.tax_code,p.shipping_class_id product_shipping_class,p.status product_status,COALESCE(i.on_hand-i.reserved,0) available FROM variants v JOIN products p ON p.id=v.product_id LEFT JOIN inventory i ON i.sku=v.sku WHERE ${skus?'v.sku IN ('+skus.map(()=>'?').join(',')+')':'v.id>?'} ORDER BY v.id LIMIT 101`,...(skus||[cursor])).toArray();
  const items=rows.slice(0,100).map(v=>{
   const reasons:string[]=[];
   if(v.status!=='active'||v.product_status!=='active')reasons.push('product_not_active');
