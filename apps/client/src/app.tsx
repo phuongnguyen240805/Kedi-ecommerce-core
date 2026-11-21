@@ -1,3 +1,4 @@
+import CatalogFeeds from '@/pages/admin/catalog-feeds';
 import BankPayments from '@/pages/admin/bank-payments';
 import PrintifyPage from '@/pages/admin/printify';
 import PodOperations from '@/pages/admin/pod-operations';
@@ -141,6 +142,7 @@ function App() {
         />
         <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><CommerceServicePage /></AuthenticationGuardWithPermission>} path="/admin/commerce-service" />
         <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><BankPayments /></AuthenticationGuardWithPermission>} path="/admin/bank-payments" />
+        <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><CatalogFeeds /></AuthenticationGuardWithPermission>} path="/admin/catalog-feeds" />
         <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><LaunchReadiness /></AuthenticationGuardWithPermission>} path="/admin/launch-readiness" />
         <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><MarketingPage /></AuthenticationGuardWithPermission>} path="/admin/marketing" />
         <Route element={<AuthenticationGuardWithPermission permission={import.meta.env.ADMIN_STORE_PERMISSION}><PrintifyPage /></AuthenticationGuardWithPermission>} path="/admin/printify" />

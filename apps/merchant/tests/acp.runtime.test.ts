@@ -51,7 +51,12 @@ test('ACP handoff uses schema-pinned requests, dedicated auth and one-use browse
  const subscriber=crypto.randomUUID();await sql("INSERT INTO marketing_subscribers VALUES(?,?,'active','nonce',?,?,?)",[subscriber,'recover@example.test',Date.now(),Date.now(),Date.now()]);
  const recoveryToken=await marketingToken({ORDER_TOKEN_SECRET:'s'.repeat(40),STORE_ID:'halifruit'},'recovery',subscriber,{scope:'checkout',checkout_id:original.id});
  const recover=()=>request('/v1/marketing/recovery',{token:recoveryToken});const recovered=await recover();assert.equal(recovered.status,200);const recoveredData=await recovered.json() as any;assert.equal(recoveredData.scope,'checkout');assert.notEqual(recoveredData.checkout_id,original.id);assert.deepEqual(await (await recover()).json(),recoveredData);assert.ok(!JSON.stringify(recoveredData).includes('recover@example.test'));
- const out=process.env.ACP_CONTRACT_OUTPUT;if(out)writeFileSync(out,JSON.stringify({request:input,created:state,updated:after,claimed}));
+ await sql("UPDATE ucp_checkout_sessions SET status='complete_in_progress',order_id='pending-order' WHERE id=?",[state.id]);
+ const pending=await (await acp('/checkout_sessions/'+state.id)).json() as any;assert.equal(pending.status,'complete_in_progress');assert.equal(pending.order,undefined);
+ await sql("UPDATE ucp_checkout_sessions SET status='completed' WHERE id=?",[state.id]);
+ const completed=await (await acp('/checkout_sessions/'+state.id)).json() as any;assert.equal(completed.status,'completed');assert.equal(completed.order,undefined);
+ await sql("UPDATE ucp_checkout_sessions SET status='canceled' WHERE id=?",[state.id]);const canceled=await (await acp('/checkout_sessions/'+state.id)).json() as any;assert.equal(canceled.order,undefined);
+ const out=process.env.ACP_CONTRACT_OUTPUT;if(out)writeFileSync(out,JSON.stringify({request:input,created:state,updated:after,claimed,pending,completed,canceled}));
 
  }finally{await worker?.stop();rmSync(dir,{recursive:true,force:true});}
 });

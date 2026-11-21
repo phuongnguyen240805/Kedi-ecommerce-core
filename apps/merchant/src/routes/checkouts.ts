@@ -26,6 +26,13 @@ checkouts.get('/catalog',async c=>{
  const rows=await physicalCatalog(c.var.db);
  return c.json({items:rows});
 });
+checkouts.get('/products/:id',async c=>{
+ if(c.env.CHECKOUT_ENABLED!=='true'&&c.env.FEEDS_ENABLED!=='true')throw ApiError.notFound('Product is not available');
+ const id=z.string().min(1).max(200).parse(c.req.param('id')),snapshot=await c.var.db.feedSnapshot();
+ const product=snapshot.offers.find(o=>o.item_id===id&&(o.mode!=='pod'||c.env.POD_ENABLED==='true'));
+ if(!product)throw ApiError.notFound('Product is not available');
+ c.header('Cache-Control','no-store');return c.json({product:{...product,description:product.description.replace(/<[^>]*>/g,'')},checkout_enabled:c.env.CHECKOUT_ENABLED==='true'&&c.env.CHECKOUT_PAYMENTS_PAUSED!=='true'});
+});
 checkouts.get('/status',c=>c.json({enabled:c.env.CHECKOUT_ENABLED==='true',stripe_configured:!!c.env.STRIPE_SECRET_KEY,qr_configured:c.env.CHECKOUT_QR_ENABLED==='true'&&!!checkoutBank(c.env),payments_paused:c.env.CHECKOUT_PAYMENTS_PAUSED==='true',payment_methods_version:1,storefront_configured:!!c.env.STORE_URL,shopping_ai_available:c.env.SHOPPING_AI_ENABLED==='true'&&!!c.env.SHOPPING_OPENAI_API_KEY&&!!c.env.SHOPPING_AI_MODEL,artwork_upload_enabled:false}));
 // Finance endpoints always require merchant admin auth; the storefront bridge cannot verify funds.
 checkouts.use('/admin/*',async(c,next)=>{c.header('Cache-Control','private, no-store');await next();},bodyLimit({maxSize:8000}),authMiddleware,adminOnly);

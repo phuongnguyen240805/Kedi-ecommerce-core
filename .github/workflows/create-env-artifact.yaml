@@ -98,6 +98,9 @@ jobs:
 
       - name: Append supported commerce settings safely
         env:
+          ACP_ENABLED: ${{ vars.ACP_ENABLED }}
+          ACP_ACCESS_VERIFIED: ${{ vars.ACP_ACCESS_VERIFIED }}
+          ACP_API_TOKEN: ${{ secrets.ACP_API_TOKEN }}
           TECHCOMBANK_ACCOUNT_NUMBER: ${{ vars.TECHCOMBANK_ACCOUNT_NUMBER }}
           TECHCOMBANK_ACCOUNT_NAME: ${{ vars.TECHCOMBANK_ACCOUNT_NAME }}
           CHECKOUT_QR_ENABLED: ${{ vars.CHECKOUT_QR_ENABLED }}

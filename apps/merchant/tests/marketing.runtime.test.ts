@@ -10,8 +10,9 @@ test('real Worker/DO deduplicates subscriptions, revokes a leased send and expor
  writeFileSync(main,`
  import original,{MerchantDO} from ${JSON.stringify(source)};export {MerchantDO};
  export default {async fetch(req,env,ctx){
- if(!new URL(req.url).pathname.startsWith('/__test/'))return original.fetch(req,env,ctx);
+ const path=new URL(req.url).pathname;if(path.startsWith('/__disabled/')){const url=new URL(req.url);url.pathname=path.replace('/__disabled','');return original.fetch(new Request(url,req),{...env,FEEDS_ENABLED:'false'},ctx);}if(!path.startsWith('/__test/'))return original.fetch(req,env,ctx);
  const db=env.MERCHANT.getByName('default');await db.marketingInit();
+ for(const [key,role]of [['sk_feed_test','admin'],['pk_feed_test','public']]){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(key));const hash=Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('');await db.run('INSERT INTO api_keys(id,key_hash,key_prefix,role) VALUES(?,?,?,?)',[key,hash,key,role]);}
  const input={email:'Buyer@Example.Test',consent:true,source:'newsletter',policy_version:'v1',rate_key:'a'.repeat(64)};
  await Promise.all(Array.from({length:8},()=>db.marketingSubscribe(input,'v1')));
  const [sub]=await db.query('SELECT * FROM marketing_subscribers');await db.marketingConfirm(sub.id,sub.nonce,'v1');
@@ -29,6 +30,16 @@ test('real Worker/DO deduplicates subscriptions, revokes a leased send and expor
   const result=await response.json() as {subscribers:{n:number}[];eligible:null;feed:{offers:unknown[]}};assert.equal(result.subscribers[0].n,1);assert.equal(result.eligible,null);assert.equal(result.feed.offers.length,1);
   const subscription={email:'new@example.test',consent:true,source:'popup',policy_version:'v1',rate_key:'c'.repeat(64)};const register=await worker.fetch('http://localhost/v1/marketing/subscribe',{method:'POST',headers:{Authorization:'Bearer '+'m'.repeat(40),'Content-Type':'application/json'},body:JSON.stringify(subscription)});assert.equal(register.status,200);assert.equal((await worker.fetch('http://localhost/v1/marketing/admin/overview',{headers:{Authorization:'Bearer '+'m'.repeat(40)}})).status,401);
   const jsonl=await worker.fetch('http://localhost/v1/feeds/openai.jsonl');assert.equal(jsonl.status,200);assert.equal(JSON.parse(await jsonl.text()).price,'25.00 USD');
-  const xml=await worker.fetch('http://localhost/v1/feeds/google.xml');assert.equal(xml.status,200);assert.match(await xml.text(),/<g:price>25.00 USD<\/g:price>/);
+  const admin={Authorization:'Bearer sk_feed_test'};
+ assert.equal((await worker.fetch('http://localhost/v1/feeds/admin/offers')).status,401);
+ assert.equal((await worker.fetch('http://localhost/v1/feeds/admin/offers',{headers:{Authorization:'Bearer pk_feed_test'}})).status,403);
+ const listing=await worker.fetch('http://localhost/v1/feeds/admin/offers',{headers:admin});assert.equal(listing.status,200);assert.equal((await listing.json() as any).items[0].sku,'SHIRT');
+ const samples=await worker.fetch('http://localhost/v1/feeds/admin/preview-records',{headers:admin});assert.equal(samples.status,200);const sampled=await samples.json() as any;assert.equal(sampled.openai[0].item_id,'v');assert.equal(sampled.sampled,1);
+ const preview=await worker.fetch('http://localhost/__disabled/v1/feeds/admin/preview/openai.jsonl',{headers:admin});assert.equal(preview.status,200);assert.match(preview.headers.get('cache-control')||'',/no-store/);assert.equal(JSON.parse(await preview.text()).price,'25.00 USD');
+ assert.equal((await worker.fetch('http://localhost/__disabled/v1/feeds/openai.jsonl')).status,404);
+ const product=await worker.fetch('http://localhost/v1/checkouts/products/v');assert.equal(product.status,200);const offer=await product.json() as any;assert.equal(offer.product.unit_price,2500);assert.equal(offer.product.item_id,'v');assert.equal(offer.checkout_enabled,false);
+ assert.equal((await worker.fetch('http://localhost/v1/checkouts/products/not-approved')).status,404);
+ const diagnostics=await worker.fetch('http://localhost/v1/feeds/admin/diagnostics',{headers:admin});assert.equal(diagnostics.status,200);assert.equal((await diagnostics.json() as any).publication_status,'ready_for_submission');
+ const xml=await worker.fetch('http://localhost/v1/feeds/google.xml');assert.equal(xml.status,200);assert.match(await xml.text(),/<g:price>25.00 USD<\/g:price>/);
  }finally{await worker?.stop();rmSync(dir,{recursive:true,force:true});}
 });

@@ -3,13 +3,13 @@ import type {ShippingSql} from './shipping-store';
 import {ShippingError} from './smart-shipping';
 export const FEED_SCHEMA='CREATE TABLE IF NOT EXISTS feed_offers(sku TEXT PRIMARY KEY,config TEXT NOT NULL,updated_at INTEGER NOT NULL);';
 const publicUrl=z.string().url().refine(value=>{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&u.hostname!=='localhost'&&!/^(\d{1,3}\.){3}\d{1,3}$/.test(u.hostname);},'Public HTTPS URL required');
-export const feedOffer=z.object({title:z.string().min(1).max(150),description:z.string().min(1).max(5000),brand:z.string().trim().min(1).max(100),seller_name:z.string().min(1).max(100),
+export const feedOffer=z.object({title:z.string().min(1).max(150),description:z.string().trim().min(1).max(5000).refine(v=>v.replace(/<[^>]*>/g,'').trim().length>0,'Description must contain text'),brand:z.string().trim().min(1).max(100),seller_name:z.string().min(1).max(100),
  url:publicUrl,image_url:publicUrl,currency:z.string().regex(/^[A-Z]{3}$/),store_country:z.string().regex(/^[A-Z]{2}$/),target_countries:z.array(z.string().regex(/^[A-Z]{2}$/)).min(1).max(100),
  mode:z.enum(['stock','pod']),approved:z.boolean(),availability_verified_until:z.number().int(),group_id:z.string().max(50).optional(),size:z.string().max(100).optional(),color:z.string().max(100).optional(),
  gtin:z.string().regex(/^\d{8}$|^\d{12,14}$/).optional(),identifier_exists:z.boolean(),google_category:z.string().max(200).optional(),gender:z.enum(['male','female','unisex']).optional(),age_group:z.enum(['newborn','infant','toddler','kids','adult']).optional(),
  mpn:z.string().trim().min(1).max(70).optional(),return_policy_url:publicUrl.optional()}).strict();
 export type FeedOffer=z.infer<typeof feedOffer>;
-export type CanonicalOffer=FeedOffer&{item_id:string;price:string;availability:'in_stock'|'out_of_stock';product_id:string};
+export type CanonicalOffer=FeedOffer&{item_id:string;price:string;availability:'in_stock'|'out_of_stock';product_id:string;sku:string;unit_price:number;decimal_places:number};
 function validGtin(gtin:string){let sum=0;for(let i=gtin.length-2,weight=3;i>=0;i--,weight=weight===3?1:3)sum+=Number(gtin[i])*weight;return (10-sum%10)%10===Number(gtin.at(-1));}
 export function canonicalOffer(row:Record<string,unknown>,now=Date.now()):CanonicalOffer{
  const config=feedOffer.parse(JSON.parse(String(row.config)));
@@ -19,10 +19,10 @@ export function canonicalOffer(row:Record<string,unknown>,now=Date.now()):Canoni
  if(config.gtin&&!validGtin(config.gtin))throw Error('invalid_gtin');
  if((config.gtin||config.mpn)&&!config.identifier_exists)throw Error('conflicting_identifier');
  if(config.identifier_exists&&!config.gtin&&!config.mpn)throw Error('missing_identifier');
- if((config.google_category==='166'||config.google_category?.startsWith('Apparel'))&&(!config.size||!config.color||!config.gender||!config.age_group))throw Error('missing_apparel_attributes');
+ if((['166','1604','187'].includes(config.google_category||'')||config.google_category?.startsWith('Apparel'))&&(!config.size||!config.color||!config.gender||!config.age_group))throw Error('missing_apparel_attributes');
  if(config.group_id&&(config.group_id===String(row.variant_id)||!config.size&&!config.color))throw Error('invalid_variant_group');
  const available=config.availability_verified_until>now&&(config.mode==='pod'?row.pod_available===1:Number(row.available)>0);
- return {...config,item_id:String(row.variant_id),product_id:String(row.product_id),price:`${(price/10**decimals).toFixed(decimals)} ${config.currency}`,availability:available?'in_stock':'out_of_stock'};
+ return {...config,sku:String(row.sku||row.variant_id),unit_price:price,decimal_places:decimals,item_id:String(row.variant_id),product_id:String(row.product_id),price:`${(price/10**decimals).toFixed(decimals)} ${config.currency}`,availability:available?'in_stock':'out_of_stock'};
 }
 export function feedSnapshot(sql:ShippingSql,now=Date.now()){
  const count=Number(sql.exec('SELECT count(*) n FROM feed_offers').toArray()[0].n);

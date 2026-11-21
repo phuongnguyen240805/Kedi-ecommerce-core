@@ -14,7 +14,7 @@ export const checkoutInput=z.object({currency:z.string().regex(/^[A-Za-z]{3}$/).
 export type CheckoutInput=z.infer<typeof checkoutInput>;
 export type CheckoutSnapshot=ReturnType<typeof quoteCheckout>;
 const fail=(code:string,message:string,status=409):never=>{throw new ShippingError(code,status,message);};
-function taxRate(sql:ShippingSql,country:string|undefined,code:string|null){
+export function taxRate(sql:ShippingSql,country:string|undefined,code:string|null){
  const rates=sql.exec("SELECT * FROM tax_rates WHERE status='active' AND (country_code=? OR country_code IS NULL) AND (tax_code=? OR tax_code IS NULL)",country||'',code).toArray();
  const score=(r:Record<string,unknown>)=>(r.country_code===country?2:0)+(r.tax_code===code&&code!==null?1:0);
  rates.sort((a,b)=>score(b)-score(a));if(rates.length>1&&score(rates[0])===score(rates[1]))fail('tax_policy_ambiguous','More than one tax rule matches this item');

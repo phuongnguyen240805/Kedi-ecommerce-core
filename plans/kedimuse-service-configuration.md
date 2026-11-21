@@ -80,3 +80,16 @@ MCP, R2/POD và Printify được tách khỏi đợt này. Không tạo đơn n
 Trang /shop-assistant tìm SKU từ catalog checkout vật lý active, còn tồn khả dụng, có trọng lượng và giá currency rõ ràng; không cần bật SHOPPING_ENABLED hoặc MCP. Bấm Review this product chỉ tạo draft, không thanh toán.
 
 AI tùy chọn dùng Secret SHOPPING_OPENAI_API_KEY và Variables SHOPPING_AI_MODEL, SHOPPING_AI_ENABLED. Để false khi chưa có key/model được tài khoản hỗ trợ. Frontend chỉ hiển thị checkbox khi backend xác nhận có cấu hình; checkbox mặc định không chọn. Chỉ gửi search text khi người dùng chọn AI và submit; không gửi địa chỉ/email hoặc cho AI ghi giá/tạo đơn. Budget hiện tại giới hạn 10 lần/client/giờ và 200 lần/store/ngày. Không tuyên bố AI live đã nghiệm thu khi chưa cấu hình.
+
+
+## 7. Catalog Admin, landing page và ACP handoff — 21/11/2026
+
+- Admin: /admin/catalog-feeds. Chọn variant, nhập metadata thực, xác minh rồi lưu. Draft mặc định chưa approved; không điền giá/tồn kho giả để được publish.
+- Landing page chuẩn bị sẵn: https://printerval.gofiber-phuongnguyen.workers.dev/commerce-products/{variant_id}. Đặt offer.url trỏ đúng trang sản phẩm cùng domain. Trang render giá, currency, stock, selected variant và JSON-LD từ cùng canonical offer; nút review chỉ tạo draft sau hành động người mua.
+- Preview trong Admin tối đa 5 offers; bản đầy đủ có bảo vệ tại /v1/feeds/admin/preview/openai.jsonl và /v1/feeds/admin/preview/google.xml. Các endpoint preview yêu cầu admin và không cache. Feed công khai vẫn theo FEEDS_ENABLED.
+- Google: dùng XML URL hiện có sau khi xác minh/claim domain, khai báo shipping/returns và phê duyệt offers thật. OpenAI: merchant onboarding rồi chọn hosted URL/file/SFTP theo quyền account thực tế. Code không tự tạo account hoặc tuyên bố feed được duyệt.
+- ACP là adapter handoff dùng schema pin 2026-04-17. GitHub Variables ACP_ENABLED và ACP_ACCESS_VERIFIED chỉ đặt true sau khi chủ tài khoản có quyền tích hợp được hỗ trợ; Secret ACP_API_TOKEN là token riêng ít nhất 32 ký tự, không gửi vào chat. Workflow chuyển các giá trị này an toàn sang Worker. Thiếu bất kỳ gate nào thì ACP đóng.
+- ACP không nhận delegated payment credentials, /complete tiếp tục từ chối và yêu cầu website confirmation. GET dùng CheckoutSession, không gắn Order extension vào trạng thái pending/completed. Handoff một lần và browser checkout tiếp tục đọc trạng thái từ shared core.
+- Không cần bật MCP hoặc R2 để sử dụng stock checkout, feed preview và ACP handoff. POD sản xuất vẫn theo chat Printify và nghiệm thu riêng.
+
+Nguồn đã đối chiếu: https://developers.openai.com/commerce/specs/file-upload/products ; https://developers.openai.com/commerce/guides/submit-product-feeds ; https://support.google.com/merchants/answer/7052112 ; https://www.agenticcommerce.dev/docs/reference/checkout .
