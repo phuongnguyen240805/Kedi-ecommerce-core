@@ -1,3 +1,4 @@
+import {storefrontMigration} from './routes/storefront-migration';
 import {acp} from './routes/acp';
 import {checkouts} from './routes/checkouts';
 /**
@@ -176,6 +177,7 @@ app.onError((err, c) => {
 
 app.get('/', (c) => c.json({ name: 'fufuni', version: '0.1.0', ok: true }));
 
+app.route('/v1/storefront-migrations',storefrontMigration);
 app.route('/v1/storefront-content', storefrontContent);
 app.route('/v1/customer-auth', customerSessions);
 app.route('/v1/setup', adminSetup);

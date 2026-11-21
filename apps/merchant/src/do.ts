@@ -1,3 +1,4 @@
+import {STOREFRONT_MIGRATION_SCHEMA,importStorefrontCatalog,provisionStorefrontAccess} from './lib/storefront-migration';
 import {beginBankPayment,verifyBankPayment,closeBankPayment} from './lib/checkout-payments';
 import {recoverCheckoutMarketing} from './lib/checkout-marketing';
 import {checkoutReadiness} from './lib/checkout-readiness';
@@ -1426,6 +1427,8 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
   checkoutBankBegin(id:string,expected:{version:number;total:number},bank:{account_number:string;account_name:string}){this.checkoutInit();return this.ctx.storage.transactionSync(()=>beginBankPayment(this.sql,id,expected,bank));}
   checkoutBankVerify(id:string,input:Parameters<typeof verifyBankPayment>[2],actor:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>verifyBankPayment(this.sql,id,input,actor));}
   checkoutBankClose(id:string,actor:string,evidence:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>closeBankPayment(this.sql,id,actor,evidence));}
+  storefrontImport(input:Parameters<typeof importStorefrontCatalog>[1],actor:string){this.ensureInitialized();ensureSchemaObjects(this.sql,STOREFRONT_CONTENT_SCHEMA);ensureSchemaObjects(this.sql,STOREFRONT_MIGRATION_SCHEMA);return this.ctx.storage.transactionSync(()=>importStorefrontCatalog(this.sql,input,actor));}
+  storefrontAccess(input:Parameters<typeof provisionStorefrontAccess>[1]){this.ensureInitialized();return this.ctx.storage.transactionSync(()=>provisionStorefrontAccess(this.sql,input));}
   checkoutInit(){this.podInit();ensureSchemaObjects(this.sql,UCP_PAYMENT_SCHEMA);ensureSchemaObjects(this.sql,CHECKOUT_SCHEMA);}
   checkoutReconcileAllow(id:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>{const now=Date.now(),[row]=this.sql.exec('SELECT next_at FROM checkout_reconcile_rates WHERE id=?',id).toArray();if(row&&Number(row.next_at)>now)return false;this.sql.exec('INSERT INTO checkout_reconcile_rates VALUES(?,?) ON CONFLICT(id) DO UPDATE SET next_at=excluded.next_at',id,now+10000);return true;});}
   checkoutReadiness(cursor:string){this.checkoutInit();return checkoutReadiness(this.sql,cursor);}
