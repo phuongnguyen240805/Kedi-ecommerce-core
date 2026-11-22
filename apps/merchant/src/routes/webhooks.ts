@@ -1,3 +1,4 @@
+import {wakeCheckoutFulfillment} from '../lib/checkout-fulfillment-runtime';
 /**
  * MIT License
  *
@@ -94,6 +95,7 @@ webhooks.post('/stripe', async (c) => {
     }
     if (webhookSession.metadata?.ucp_checkout_session_id) {
       await handleUCPStripeWebhook(c.var.db, webhookSession.id, webhookSession);
+      const checkoutId=webhookSession.metadata?.ucp_checkout_session_id;if(checkoutId&&c.env.CHECKOUT_ORDER_EXPORT_ENABLED==='true')c.executionCtx.waitUntil(wakeCheckoutFulfillment(c.env,c.var.db,checkoutId));
       return c.json({ ok: true });
     }
     

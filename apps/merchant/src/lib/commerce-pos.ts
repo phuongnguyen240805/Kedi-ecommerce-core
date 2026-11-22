@@ -21,6 +21,7 @@ export async function syncCommerceOrder(
   if (!job) return { synced: true };
   try {
     const { order, snapshot } = job;
+    if(snapshot.test_payment&&env.CHECKOUT_TEST_EXPORT_ENABLED!=='true')throw new ShippingError('test_export_disabled',409,'Stripe test orders require explicit export approval');
     if (
       snapshot.shop_id !== env.PANCAKE_SHOP_ID ||
       snapshot.warehouse_id !== env.PANCAKE_WAREHOUSE_ID
@@ -31,7 +32,7 @@ export async function syncCommerceOrder(
         'Shop hoặc kho POS đã đổi.',
       );
     if (
-      order.payment_method === 'techcombank_qr' &&
+      order.payment_method !== 'cod' &&
       env.PANCAKE_PAYMENT_MAPPING_VERIFIED !== 'true'
     )
       throw new ShippingError(
@@ -90,9 +91,10 @@ export async function syncCommerceOrder(
         discount: 0,
         tax: snapshot.tax_inclusive ? 0 : snapshot.totals.tax_vnd,
         cash: 0,
+        charged_by_card:order.payment_method==='stripe'?order.total_vnd:0,
         transfer_money:
           order.payment_method === 'techcombank_qr' ? order.total_vnd : 0,
-        note: `Fufuni ${order.reference}; dispatch=Pancake; ${snapshot.note}; GHN district=${r.district_id}, ward=${r.ward_code}; theo dõi vận đơn qua Pancake`,
+        note: `Fufuni ${order.reference}; payment=${order.payment_method}; test=${!!snapshot.test_payment}; dispatch=Pancake; ${snapshot.note}; GHN district=${r.district_id}, ward=${r.ward_code}; theo dõi vận đơn qua Pancake`,
         items: snapshot.items.map(
           (i: {
             pos_variant_id: string;

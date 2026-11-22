@@ -1,3 +1,4 @@
+import {activateCheckoutFulfillment} from './checkout-fulfillment';
 import {quoteCheckout,type CheckoutInput} from './checkout-core';
 import { z } from 'zod';
 import type Stripe from 'stripe';
@@ -71,7 +72,7 @@ export function checkoutReturnUrl(value: string | undefined, fallback: string, o
  return url.toString();
 }
 
-export function beginUcpPayment(sql: ShippingSql, sessionId: string, successUrl: string, cancelUrl: string, now = Date.now(), expected?:{version:number;total:number}, choice?:{method:'techcombank_qr';bank:{account_number:string;account_name:string}}) {
+export function beginUcpPayment(sql: ShippingSql, sessionId: string, successUrl: string, cancelUrl: string, now = Date.now(), expected?:{version:number;total:number}, choice?:{method:'techcombank_qr';bank:{account_number:string;account_name:string}}|{method:'cod'}) {
  const session = sql.exec('SELECT * FROM ucp_checkout_sessions WHERE id=?', sessionId).toArray()[0];
  if (!session) fail('checkout_not_found', 'Checkout not found.');
  if(expected){const [draft]=sql.exec('SELECT version,snapshot_json FROM checkout_drafts WHERE id=?',sessionId).toArray();if(!draft||Number(draft.version)!==expected.version||Number(JSON.parse(String(draft.snapshot_json)).total)!==expected.total)fail('checkout_quote_changed','Quote changed before payment; review the current total.');}
@@ -115,7 +116,7 @@ export function beginUcpPayment(sql: ShippingSql, sessionId: string, successUrl:
  if(hasDrafts){const [draft]=sql.exec('SELECT snapshot_json FROM checkout_drafts WHERE id=?',sessionId).toArray();if(draft){const state=JSON.parse(String(draft.snapshot_json));if(state.physical&&state.address)request.payment_intent_data={shipping:{name:state.address.name,...(state.address.phone?{phone:state.address.phone}:{}),address:{line1:state.address.line_one,line2:state.address.line_two,city:state.address.city,state:state.address.state,country:state.address.country,postal_code:state.address.postal_code}}};}}
  const time = new Date(now).toISOString();
  if(hasDrafts&&sql.exec('SELECT id FROM checkout_drafts WHERE id=?',sessionId).toArray().length){
-  sql.exec('INSERT INTO checkout_payment_choices VALUES(?,?,?,?,?,?)',sessionId,choice?.method||'stripe',choice?JSON.stringify(choice.bank):null,'KM'+crypto.randomUUID().replaceAll('-','').slice(0,20).toUpperCase(),now+3600000,time);
+  sql.exec('INSERT INTO checkout_payment_choices VALUES(?,?,?,?,?,?)',sessionId,choice?.method||'stripe',choice?.method==='techcombank_qr'?JSON.stringify(choice.bank):null,'KM'+crypto.randomUUID().replaceAll('-','').slice(0,20).toUpperCase(),now+3600000,time);
   const orderId=crypto.randomUUID(),number='ORD-'+orderId;
   sql.exec("INSERT INTO orders(id,number,status,customer_email,subtotal_cents,tax_cents,shipping_cents,total_cents,currency,created_at) VALUES(?,?,'pending',?,?,?,?,?,?,?)",orderId,number,snapshot.email,snapshot.subtotal,snapshot.tax,snapshot.shipping,snapshot.amount,snapshot.currency,time);
   const [draft]=sql.exec('SELECT snapshot_json FROM checkout_drafts WHERE id=?',sessionId).toArray();const state=JSON.parse(String(draft.snapshot_json)),a=state.address;if(a)sql.exec('UPDATE orders SET shipping_name=?,shipping_phone=?,ship_to=?,shipping_rate_id=? WHERE id=?',a.name,a.phone,JSON.stringify({line1:a.line_one,line2:a.line_two,city:a.city,state:a.state,country:a.country,postal_code:a.postal_code}),state.selected_shipping_option_id,orderId);
@@ -188,6 +189,7 @@ export function settleUcpPayment(sql: ShippingSql, raw: SettlementInput, now = D
  sql.exec("UPDATE ucp_checkout_sessions SET status='completed',stripe_session_id=?,order_id=?,order_number=?,updated_at=? WHERE id=?",
   provider==='stripe'?input.stripeId:null, orderId, number, time, input.sessionId);
  if (attempt&&provider==='stripe') sql.exec('UPDATE ucp_payment_attempts SET stripe_session_id=? WHERE session_id=?', input.stripeId, input.sessionId);
+ activateCheckoutFulfillment(sql,input.sessionId);
  return { paid: true, orderId };
 }
 

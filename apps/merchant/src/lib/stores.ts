@@ -17,6 +17,7 @@ export type StoreConfig = z.infer<typeof storeSchema>;
 
 // These values belong to a store, never to every customer of the Worker.
 const storeSettings = new Set([
+  'CHECKOUT_COD_ENABLED','CHECKOUT_ORDER_EXPORT_ENABLED','CHECKOUT_TEST_EXPORT_ENABLED','CHECKOUT_QR_ENABLED','CHECKOUT_PAYMENTS_PAUSED',
   'CHECKOUT_CARRIER_ENABLED','CHECKOUT_ENABLED','ACP_ENABLED','ACP_ACCESS_VERIFIED',
   'MARKETING_AI_ENABLED','MARKETING_AI_MODEL',
   'SHOPPING_ENABLED',

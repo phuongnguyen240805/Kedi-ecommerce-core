@@ -649,7 +649,8 @@ export function finishOutbox(
   );
   if (posId) {
     const order = row(sql, id);
-    if (order.reservation_state === 'held') {
+    if(order.reservation_state==='ucp_held'){const snapshot=JSON.parse(String(order.snapshot_json));for(const item of snapshot.items){sql.exec('UPDATE inventory SET on_hand=on_hand-?,reserved=reserved-? WHERE sku=? AND on_hand>=reserved AND reserved>=?',item.qty,item.qty,item.sku,item.qty);if(Number(sql.exec('SELECT changes() n').toArray()[0].n)!==1)fail('inventory_hold_conflict','COD inventory hold needs review');sql.exec("UPDATE ucp_stock_holds SET state='consumed' WHERE session_id=? AND sku=? AND state='held'",snapshot.checkout_session_id,item.sku);}}
+  if (order.reservation_state === 'held') {
       const snapshot = JSON.parse(String(order.snapshot_json));
       for (const item of snapshot.items) {
         // POS has accepted the order. Locally consume the held quantity until the
@@ -713,6 +714,7 @@ export function cancelPendingOrder(
       'cancel_needs_reconciliation',
       'Cần đối soát tiền và POS trước hủy đơn.',
     );
+  if(order.reservation_state==='ucp_held'){const snapshot=JSON.parse(String(order.snapshot_json));for(const item of snapshot.items){sql.exec('UPDATE inventory SET reserved=reserved-? WHERE sku=? AND reserved>=?',item.qty,item.sku,item.qty);if(Number(sql.exec('SELECT changes() n').toArray()[0].n)!==1)fail('inventory_hold_conflict','COD inventory hold needs review');sql.exec("UPDATE ucp_stock_holds SET state='released' WHERE session_id=? AND sku=? AND state='held'",snapshot.checkout_session_id,item.sku);}sql.exec("UPDATE ucp_checkout_sessions SET status='canceled' WHERE id=?",snapshot.checkout_session_id);}
   if (order.reservation_state === 'held') {
     const snapshot = JSON.parse(String(order.snapshot_json));
     for (const item of snapshot.items) {

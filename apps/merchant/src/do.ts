@@ -1,3 +1,5 @@
+import {FULFILLMENT_SCHEMA,prepareCheckoutFulfillment,type FulfillmentConfig} from './lib/checkout-fulfillment';
+import {beginCodPayment} from './lib/checkout-payments';
 import {expireOpenCarts,repairLegacyReservationDeficits} from './lib/cart-maintenance';
 import {ensureCartItemCurrency,ensureOrderCheckoutSchema} from './lib/cart-schema';
 import {STOREFRONT_MIGRATION_SCHEMA,importStorefrontCatalog,provisionStorefrontAccess} from './lib/storefront-migration';
@@ -1430,15 +1432,17 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
      default:throw new ShippingError('unsupported_checkout_operation',400,'Unsupported checkout operation');
     }return {ok:true,value};}catch(error){if(error instanceof ShippingError)return {ok:false,error:{code:error.code,status:error.status,message:error.message}};if(error instanceof Error&&error.name==='ZodError')return {ok:false,error:{code:'invalid_input',status:400,message:'Invalid checkout input'}};throw error;}
   }
+  checkoutFulfillmentPrepare(id:string,method:'stripe'|'techcombank_qr'|'cod',config:FulfillmentConfig){this.checkoutInit();this.ensureCommerceStorage();return this.ctx.storage.transactionSync(()=>prepareCheckoutFulfillment(this.sql,id,method,config));}
+  checkoutCodBegin(id:string,expected:{version:number;total:number}){this.checkoutInit();this.ensureCommerceStorage();return this.ctx.storage.transactionSync(()=>beginCodPayment(this.sql,id,expected));}
   checkoutBankBegin(id:string,expected:{version:number;total:number},bank:{account_number:string;account_name:string}){this.checkoutInit();return this.ctx.storage.transactionSync(()=>beginBankPayment(this.sql,id,expected,bank));}
   checkoutBankVerify(id:string,input:Parameters<typeof verifyBankPayment>[2],actor:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>verifyBankPayment(this.sql,id,input,actor));}
   checkoutBankClose(id:string,actor:string,evidence:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>closeBankPayment(this.sql,id,actor,evidence));}
   storefrontImport(input:Parameters<typeof importStorefrontCatalog>[1],actor:string){this.ensureInitialized();ensureSchemaObjects(this.sql,STOREFRONT_CONTENT_SCHEMA);ensureSchemaObjects(this.sql,STOREFRONT_MIGRATION_SCHEMA);return this.ctx.storage.transactionSync(()=>importStorefrontCatalog(this.sql,input,actor));}
   storefrontAccess(input:Parameters<typeof provisionStorefrontAccess>[1]){this.ensureInitialized();return this.ctx.storage.transactionSync(()=>provisionStorefrontAccess(this.sql,input));}
-  checkoutInit(){this.podInit();ensureSchemaObjects(this.sql,UCP_PAYMENT_SCHEMA);ensureSchemaObjects(this.sql,CHECKOUT_SCHEMA);}
+  checkoutInit(){this.podInit();ensureSchemaObjects(this.sql,UCP_PAYMENT_SCHEMA);ensureSchemaObjects(this.sql,CHECKOUT_SCHEMA);ensureSchemaObjects(this.sql,FULFILLMENT_SCHEMA);}
   checkoutReconcileAllow(id:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>{const now=Date.now(),[row]=this.sql.exec('SELECT next_at FROM checkout_reconcile_rates WHERE id=?',id).toArray();if(row&&Number(row.next_at)>now)return false;this.sql.exec('INSERT INTO checkout_reconcile_rates VALUES(?,?) ON CONFLICT(id) DO UPDATE SET next_at=excluded.next_at',id,now+10000);return true;});}
   checkoutReadiness(cursor:string,skus?:string[],carrierCountry?:string){this.checkoutInit();return checkoutReadiness(this.sql,cursor,skus,carrierCountry);}
-  checkoutCarrierSave(id:string,quoteId:string,version:number,options:Parameters<typeof saveCheckoutCarrier>[4],context:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>saveCheckoutCarrier(this.sql,id,quoteId,version,options,context));}
+  checkoutCarrierSave(id:string,quoteId:string,version:number,options:Parameters<typeof saveCheckoutCarrier>[4],context:string,execution?:unknown){this.checkoutInit();return this.ctx.storage.transactionSync(()=>saveCheckoutCarrier(this.sql,id,quoteId,version,options,context,Date.now(),execution));}
   checkoutGet(id:string){this.checkoutInit();return checkoutRead(this.sql,id);}
   checkoutCreate(raw:RetailCheckoutInput,source:string,key:string){this.checkoutInit();const input=checkoutInput.parse(raw);return this.ctx.storage.transactionSync(()=>checkoutCommand(this.sql,source+':create',key,input,()=>checkoutSave(this.sql,input,source)));}
   checkoutUpdate(id:string,patch:Partial<RetailCheckoutInput>,source:string,key:string,version?:number,browser=false){this.checkoutInit();return this.ctx.storage.transactionSync(()=>checkoutCommand(this.sql,source+':update:'+id,key,{patch,version:version??null,browser},()=>{
