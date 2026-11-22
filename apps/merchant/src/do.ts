@@ -1,3 +1,4 @@
+import {expireOpenCarts,repairLegacyReservationDeficits} from './lib/cart-maintenance';
 import {ensureCartItemCurrency,ensureOrderCheckoutSchema} from './lib/cart-schema';
 import {STOREFRONT_MIGRATION_SCHEMA,importStorefrontCatalog,provisionStorefrontAccess} from './lib/storefront-migration';
 import {beginBankPayment,verifyBankPayment,closeBankPayment} from './lib/checkout-payments';
@@ -1326,7 +1327,7 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
     }
 
     // Run outside the legacy best-effort migration catch: failed upgrades must retry.
-    this.ctx.storage.transactionSync(() => {ensureCartItemCurrency(this.sql);ensureOrderCheckoutSchema(this.sql);});
+    this.ctx.storage.transactionSync(() => {ensureCartItemCurrency(this.sql);ensureOrderCheckoutSchema(this.sql);repairLegacyReservationDeficits(this.sql);});
 
     this.initialized = true;
   }
@@ -1682,28 +1683,6 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
 
     this.sql.exec('DELETE FROM customer_sessions WHERE expires_at < ?', now);
     this.sql.exec('DELETE FROM customer_auth_attempts WHERE window_start < ?', Date.now() - 3600_000);
-    const expiredCarts = this.query<{ id: string }>(
-      `SELECT id FROM carts WHERE status = 'open' AND expires_at < ?`,
-      [now]
-    );
-
-    if (expiredCarts.length === 0) return 0;
-
-    const cartIds = expiredCarts.map((c) => c.id);
-    const placeholders = cartIds.map(() => '?').join(',');
-
-    const reservedItems = this.query<{ sku: string; qty: number }>(
-      `SELECT sku, SUM(qty) as qty FROM cart_items WHERE cart_id IN (${placeholders}) GROUP BY sku`,
-      cartIds
-    );
-
-    for (const item of reservedItems) {
-      this.run(`UPDATE inventory SET reserved = reserved - ? WHERE sku = ?`, [item.qty, item.sku]);
-    }
-
-    this.run(`UPDATE carts SET status = 'expired' WHERE id IN (${placeholders})`, cartIds);
-    this.run(`DELETE FROM cart_items WHERE cart_id IN (${placeholders})`, cartIds);
-
-    return expiredCarts.length;
+    return this.ctx.storage.transactionSync(() => expireOpenCarts(this.sql,now));
   }
 }

@@ -1,3 +1,4 @@
+import {expireOpenCarts,repairLegacyReservationDeficits} from '../src/lib/cart-maintenance';
 import {ensureOrderCheckoutSchema} from '../src/lib/cart-schema';
 import {CHECKOUT_SCHEMA} from '../src/lib/checkout-core';
 import { test } from 'node:test';
@@ -122,4 +123,23 @@ test('legacy order delivery column migrates before payment, preserves pending or
  assert.equal(f.db.prepare('SELECT status FROM orders').get()!.status,'paid');
  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM payment_receipts').get()!.n,1);
  assert.equal(f.db.prepare('SELECT on_hand FROM inventory').get()!.on_hand,8);f.db.close();
+});
+
+test('expired unreserved carts never release another checkout payment hold',()=>{
+ const f=fixture();f.start();const before=f.db.prepare('SELECT on_hand,reserved FROM inventory').get();
+ f.db.exec("INSERT INTO carts(id,customer_email,expires_at) VALUES('expired-cart','test@example.invalid','2000-01-01T00:00:00.000Z');INSERT INTO cart_items(id,cart_id,sku,title,qty,unit_price_cents) VALUES('expired-line','expired-cart','shirt','Shirt',5,1500)");
+ assert.equal(f.tx(()=>expireOpenCarts(f.sql,new Date().toISOString())),1);
+ assert.equal(f.tx(()=>expireOpenCarts(f.sql,new Date().toISOString())),0);
+ assert.deepEqual(f.db.prepare('SELECT on_hand,reserved FROM inventory').get(),before);
+ attachUcpPayment(f.sql,'checkout','cs_test','https://checkout.stripe.com/test');assert.equal(f.tx(()=>settleUcpPayment(f.sql,f.paid)).paid,true);f.db.close();
+});
+test('ledger repair restores only owned hold deficits with audit and never fabricates stock',()=>{
+ const f=fixture();f.start();f.db.exec("UPDATE inventory SET reserved=-3 WHERE sku='shirt'");
+ f.tx(()=>repairLegacyReservationDeficits(f.sql));f.tx(()=>repairLegacyReservationDeficits(f.sql));
+ assert.equal(f.db.prepare('SELECT reserved FROM inventory').get()!.reserved,2);
+ assert.equal(f.db.prepare('SELECT on_hand FROM inventory').get()!.on_hand,10);
+ assert.equal(f.db.prepare('SELECT COUNT(*) n FROM inventory_reservation_repairs').get()!.n,1);
+ attachUcpPayment(f.sql,'checkout','cs_test','https://checkout.stripe.com/test');assert.equal(f.tx(()=>settleUcpPayment(f.sql,f.paid)).paid,true);
+ assert.equal(f.db.prepare('SELECT on_hand FROM inventory').get()!.on_hand,8);
+ const unsafe=fixture();unsafe.start();unsafe.db.exec("UPDATE inventory SET on_hand=0,reserved=0 WHERE sku='shirt'");unsafe.tx(()=>repairLegacyReservationDeficits(unsafe.sql));assert.equal(unsafe.db.prepare('SELECT on_hand FROM inventory').get()!.on_hand,0);assert.equal(unsafe.db.prepare('SELECT reserved FROM inventory').get()!.reserved,0);assert.throws(()=>unsafe.tx(()=>settleUcpPayment(unsafe.sql,unsafe.paid)),/inventory/);f.db.close();unsafe.db.close();
 });
