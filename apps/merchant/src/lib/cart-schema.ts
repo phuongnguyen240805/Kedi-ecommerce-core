@@ -7,3 +7,9 @@ export function ensureCartItemCurrency(sql: {exec(query:string,...params:any[]):
  sql.exec('UPDATE cart_items SET currency=(SELECT currency FROM carts WHERE carts.id=cart_items.cart_id) WHERE currency IS NULL');
  sql.exec('INSERT INTO migrations(name) VALUES(?)',name);
 }
+
+/** Persisted orders may predate the checkout delivery-selection column. */
+export function ensureOrderCheckoutSchema(sql: {exec(query:string,...params:any[]):{toArray():Record<string,unknown>[]}}) {
+ if(!sql.exec('PRAGMA table_info(orders)').toArray().some(column=>column.name==='shipping_rate_id'))
+  sql.exec('ALTER TABLE orders ADD COLUMN shipping_rate_id TEXT');
+}

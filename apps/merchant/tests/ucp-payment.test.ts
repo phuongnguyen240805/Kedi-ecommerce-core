@@ -1,3 +1,5 @@
+import {ensureOrderCheckoutSchema} from '../src/lib/cart-schema';
+import {CHECKOUT_SCHEMA} from '../src/lib/checkout-core';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -100,4 +102,24 @@ test('payment holds prevent concurrent last-unit charges; only bound expiration 
  f.db.exec("UPDATE ucp_checkout_sessions SET status='ready_for_complete' WHERE id='second'");assert.throws(()=>f.tx(()=>beginUcpPayment(f.sql,'second','https://shop.test/ok','https://shop.test/cancel')),/Stock changed/);
  attachUcpPayment(f.sql,'checkout','cs_test','https://checkout.stripe.com/test');assert.equal(f.tx(()=>expireUcpPayment(f.sql,'checkout','forged')).released,false);assert.equal(f.db.prepare('SELECT reserved FROM inventory').get()!.reserved,4);
  f.tx(()=>expireUcpPayment(f.sql,'checkout','cs_test'));f.tx(()=>expireUcpPayment(f.sql,'checkout','cs_test'));assert.equal(f.db.prepare('SELECT reserved FROM inventory').get()!.reserved,2);
+});
+
+test('legacy order delivery column migrates before payment, preserves pending order through paid retry',()=>{
+ const f=fixture();f.db.exec(CHECKOUT_SCHEMA);f.db.exec('ALTER TABLE orders DROP COLUMN shipping_rate_id');
+ const address={name:'Test Buyer',phone:'0900000000',line_one:'123 Test Street',line_two:'',city:'Test',state:'',country:'US',postal_code:'90001'};
+ f.db.prepare("INSERT INTO checkout_drafts(id,source,input_json,snapshot_json,version) VALUES('checkout','web','{}',?,1)").run(JSON.stringify({physical:true,address,selected_shipping_option_id:'carrier:fixture:0'}));
+ assert.throws(()=>f.start(),/shipping_rate_id/);
+ assert.equal(f.db.prepare('SELECT COUNT(*) n FROM orders').get()!.n,0);
+ assert.equal(f.db.prepare('SELECT reserved FROM inventory').get()!.reserved,2);
+ f.tx(()=>{ensureOrderCheckoutSchema(f.sql);ensureOrderCheckoutSchema(f.sql);});
+ f.start();f.start();
+ const order=f.db.prepare('SELECT id,status,shipping_rate_id FROM orders').get()!;
+ assert.equal(order.status,'pending');assert.equal(order.shipping_rate_id,'carrier:fixture:0');
+ attachUcpPayment(f.sql,'checkout','cs_test','https://checkout.stripe.com/test');
+ const first=f.tx(()=>settleUcpPayment(f.sql,f.paid)),again=f.tx(()=>settleUcpPayment(f.sql,f.paid));
+ assert.deepEqual(first,again);assert.equal(first.orderId,order.id);
+ assert.equal(f.db.prepare('SELECT COUNT(*) n FROM orders').get()!.n,1);
+ assert.equal(f.db.prepare('SELECT status FROM orders').get()!.status,'paid');
+ assert.equal(f.db.prepare('SELECT COUNT(*) n FROM payment_receipts').get()!.n,1);
+ assert.equal(f.db.prepare('SELECT on_hand FROM inventory').get()!.on_hand,8);f.db.close();
 });

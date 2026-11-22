@@ -1,4 +1,4 @@
-import {ensureCartItemCurrency} from './lib/cart-schema';
+import {ensureCartItemCurrency,ensureOrderCheckoutSchema} from './lib/cart-schema';
 import {STOREFRONT_MIGRATION_SCHEMA,importStorefrontCatalog,provisionStorefrontAccess} from './lib/storefront-migration';
 import {beginBankPayment,verifyBankPayment,closeBankPayment} from './lib/checkout-payments';
 import {recoverCheckoutMarketing} from './lib/checkout-marketing';
@@ -1326,7 +1326,7 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
     }
 
     // Run outside the legacy best-effort migration catch: failed upgrades must retry.
-    this.ctx.storage.transactionSync(() => ensureCartItemCurrency(this.sql));
+    this.ctx.storage.transactionSync(() => {ensureCartItemCurrency(this.sql);ensureOrderCheckoutSchema(this.sql);});
 
     this.initialized = true;
   }
