@@ -10,7 +10,7 @@ on:
 jobs:
   typecheck:
     name: TypeScript typecheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,7 +22,7 @@ jobs:
 
   commerce-tests:
     name: Commerce, store isolation and operations UI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -38,7 +38,7 @@ jobs:
 
   lint:
     name: ESLint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
