@@ -39,5 +39,6 @@ playwright-report/
 # Local environment secrets and generated QA artifacts
 .env.*
 !.env.example
+!apps/merchant/.env.marketing.example
 .dev.vars.*
 outputs/

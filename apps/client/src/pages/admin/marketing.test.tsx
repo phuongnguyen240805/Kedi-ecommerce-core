@@ -5,6 +5,7 @@ jest.mock('@/authentication',()=>({useSecuredApi:()=>mockApi}));
 jest.mock('@/lib/api-base',()=>({getApiBase:()=>''}));
 jest.mock('@/layouts/default',()=>({__esModule:true,default:({children}:{children:React.ReactNode})=><div>{children}</div>}));
 import MarketingPage from './marketing';
+import {MarketingOperations} from './MarketingOperations';
 let element:HTMLDivElement,root:Root;
 beforeEach(async()=>{jest.clearAllMocks();(globalThis as {IS_REACT_ACT_ENVIRONMENT?:boolean}).IS_REACT_ACT_ENVIRONMENT=true;
  mockApi.getJson.mockImplementation(async(url:string)=>url.includes('/overview')?{subscribers:[{status:'active',count:3}],jobs:[],attributed_revenue:[{currency:'USD',net_revenue_minor:2500,orders:1}]}:url.includes('/rfm')?{rows:[{id:'buyer',email:'buyer@test.com',currency:'USD',recency_days:3,frequency:1,monetary_minor:2500,segment:'recent'}],next_cursor:null,window_days:365}:{rows:[]});
@@ -16,4 +17,10 @@ test('dashboard only reads on load, and experiment publication requires reviewed
 test('AI drafting fills variant B and never starts an experiment or sends email',async()=>{
  const brief=element.querySelector('textarea')!;await act(async()=>{Object.getOwnPropertyDescriptor(Object.getPrototypeOf(brief),'value')!.set!.call(brief,'A welcome email for our new custom print shop.');brief.dispatchEvent(new Event('input',{bubbles:true}));});
  await act(async()=>button('Gợi ý bản nháp B bằng AI').click());expect(mockApi.postJson).toHaveBeenCalledTimes(1);expect(mockApi.postJson).toHaveBeenCalledWith('/v1/marketing/admin/draft',expect.objectContaining({kind:'welcome'}));expect((element.querySelectorAll('input')[1] as HTMLInputElement).value).toBe('Draft subject');expect(button('Lưu và bắt đầu thử nghiệm').disabled).toBe(true);expect(element.textContent).toContain('Chưa gửi email.');
+});
+test('unknown email has a cancel action but no retry; policy edits require explicit save',async()=>{
+ const policy={welcome:true,abandoned:true,post_purchase:true,win_back:true,abandoned_after_hours:1,post_purchase_after_days:3,win_back_after_days:90,daily_cap:3,cooldown_hours:0,batch_size:10};
+ mockApi.getJson.mockImplementation(async(url:string)=>url.includes('/settings')?policy:{rows:[{id:'job',email:'buyer@test.com',kind:'win_back',state:'unknown',attempts:1,provider_id:null}]});
+ await act(async()=>root.render(<MarketingOperations/>));expect(mockApi.postJson).not.toHaveBeenCalled();expect(element.textContent).toContain('buyer@test.com');expect(element.textContent).not.toContain('Thử lại sau sửa lỗi');expect(button('Hủy job').disabled).toBe(true);
+ await act(async()=>button('Lưu cấu hình automation').click());expect(mockApi.postJson).toHaveBeenCalledWith('/v1/marketing/admin/settings',policy);
 });
