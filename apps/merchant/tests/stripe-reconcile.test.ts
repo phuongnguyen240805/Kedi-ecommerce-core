@@ -1,8 +1,13 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import type Stripe from 'stripe';
-import {applyStripeCheckout,reconcileStripeCheckout} from '../src/lib/ucp-payment-service';
+import {applyStripeCheckout,reconcileStripeCheckout,closeStripeForPaymentChange} from '../src/lib/ucp-payment-service';
 import type {DOStub} from '../src/types';
+test('switch closes an open Stripe session, tolerates expire timeout only after verified expiry, and blocks paid/processing/foreign sessions',async()=>{
+ for(const mode of ['open','timeout-expired','paid','processing','foreign']){const f=fixture();f.db.query=async()=>[{stripe_session_id:'cs_fixture',created_at:new Date().toISOString(),request_json:'{}'}] as never;let reads=0,expires=0;const value=()=>session({status:mode==='paid'||mode==='processing'?'complete':mode==='timeout-expired'&&reads>1?'expired':'open',payment_status:mode==='paid'?'paid':'unpaid',...(mode==='foreign'?{metadata:{ucp_checkout_session_id:'other'}}:{})});
+ const provider={retrieve:async()=>{reads++;return value();},expire:async()=>{expires++;if(mode==='timeout-expired')throw Error('timeout');return session({status:'expired',payment_status:'unpaid'});}} as unknown as Pick<Stripe['checkout']['sessions'],'retrieve'|'create'|'expire'>;
+ if(['open','timeout-expired'].includes(mode)){assert.equal(await closeStripeForPaymentChange(f.db,{},'checkout',provider),'cs_fixture');assert.equal(expires,1);}else{await assert.rejects(()=>closeStripeForPaymentChange(f.db,{},'checkout',provider));assert.equal(expires,0);}if(mode==='paid')assert.equal(f.calls.length,1);}
+});
 function fixture(){const calls:unknown[]=[];return {calls,db:{ucpPaymentSettle:async(input:unknown)=>{calls.push(input);return {paid:true,orderId:'order'};},ucpPaymentExpire:async(id:string,stripe:string)=>{calls.push({expired:id,stripe});return {released:true};}} as DOStub};}
 function session(extra:Partial<Stripe.Checkout.Session>={}){return {id:'cs_fixture',metadata:{ucp_checkout_session_id:'checkout'},status:'complete',payment_status:'paid',amount_total:6270,currency:'usd',payment_intent:'pi_fixture',...extra} as Stripe.Checkout.Session;}
 test('server-fetched Stripe success forwards exact amount/currency/binding to atomic paid gate',async()=>{const f=fixture();await applyStripeCheckout(f.db,'checkout',session());assert.deepEqual(f.calls,[{sessionId:'checkout',stripeId:'cs_fixture',paymentStatus:'paid',amount:6270,currency:'usd',paymentIntent:'pi_fixture'}]);});

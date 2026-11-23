@@ -83,7 +83,7 @@ export async function syncCommerceShipment(env: Env, db: ShipmentDB, id: string)
       const type = snapshot.shipping.offer.service_type_id;
       if (![2, 5].includes(type)) throw new ShippingError('shipment_service_unsupported', 409, 'Dịch vụ GHN chưa được hỗ trợ.');
       const items = z.array(z.object({ quantity: z.number().int().positive(), variation_info: z.object({ weight: z.number().int().positive() }) })).parse(current.pos.items);
-      if (items.reduce((sum, item) => sum + item.quantity * item.variation_info.weight, 0) !== parcel.weight_g)
+      if (items.reduce((sum, item) => sum + item.quantity * item.variation_info.weight, 0) + (snapshot.checkout_session_id?Number(snapshot.parcel.packaging_weight_g||0):0) !== parcel.weight_g)
         throw new ShippingError('shipment_weight_mismatch', 409, 'Khối lượng kiện POS không khớp báo giá. Cần kiểm tra đóng gói.');
       unwrapShipping(await db.commerceShipmentMark(id, token, partnerId, accountId));
       // Pancake's own order form submits these GHN options when saving an order.

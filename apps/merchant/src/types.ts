@@ -30,6 +30,9 @@ import type {ShippingSelection,ShippingResult} from './lib/shipping-store';
 export type Env = ShippingEnv & {
   CHECKOUT_ENABLED?:string;
   CHECKOUT_QR_ENABLED?:string;
+  CHECKOUT_COD_ENABLED?:string;
+  CHECKOUT_ORDER_EXPORT_ENABLED?:string;
+  CHECKOUT_TEST_EXPORT_ENABLED?:string;
   CHECKOUT_PAYMENTS_PAUSED?:string;
   CHECKOUT_BFF_TOKEN?:string;
   ACP_ENABLED?:string;
@@ -64,6 +67,14 @@ export type Env = ShippingEnv & {
   SHOPPING_OPENAI_API_KEY?:string;
   SHOPPING_MCP_TOKEN?:string;
   POD_ENABLED?: string;
+  POD_NEW_PIPELINE_ENABLED?:string;
+  POD_PRINTIFY_MEDIA_WRITE_ENABLED?:string;
+  POD_PRINTIFY_PRODUCT_WRITE_ENABLED?:string;
+  POD_ORDER_CREATE_ENABLED?:string;
+  POD_PRODUCTION_RELEASE_ENABLED?:string;
+  POD_WEBHOOK_ENABLED?:string;
+  PRINTIFY_WEBHOOK_SECRET?:string;
+  PRINTIFY_WEBHOOK_PREVIOUS_SECRET?:string;
   STORE_PUBLIC_API_URL?: string;
   POD_SUBMIT_ENABLED?: string;
   POD_ACCOUNT_AUTOMATION_VERIFIED?: string;
@@ -270,6 +281,8 @@ export type Env = ShippingEnv & {
  * Hono application layer via `getDb()`.  Matches the actual DO stub API.
  */
 export type DOStub = {
+  podV2Init:()=>Promise<void>;
+  podV2:(command:import('./lib/pod-v2-store').PodV2Command)=>Promise<unknown>;
   commerceExpireHolds: ()=>Promise<ReturnType<MerchantDO['commerceExpireHolds']>>;
   shippingPollClaim: MerchantDO['shippingPollClaim'] extends (...a:infer A)=>infer R?(...a:A)=>Promise<R>:never;
   shippingPollFinish: MerchantDO['shippingPollFinish'] extends (...a:infer A)=>infer R?(...a:A)=>Promise<R>:never;
@@ -346,6 +359,8 @@ export type DOStub = {
   podClaim: (id:string,token:string) => Promise<ReturnType<MerchantDO['podClaim']>>;
   podFinish: (id:string,token:string,result:Parameters<MerchantDO['podFinish']>[2]) => Promise<void>;
   ucpPaymentBegin: (id: string, successUrl: string, cancelUrl: string,expected?:{version:number;total:number}) => Promise<ReturnType<MerchantDO['ucpPaymentBegin']>>;
+  checkoutFulfillmentPrepare:(...args:Parameters<MerchantDO['checkoutFulfillmentPrepare']>)=>Promise<ReturnType<MerchantDO['checkoutFulfillmentPrepare']>>;
+  checkoutCodBegin:(...args:Parameters<MerchantDO['checkoutCodBegin']>)=>Promise<ReturnType<MerchantDO['checkoutCodBegin']>>;
   checkoutBankBegin:(...args:Parameters<MerchantDO['checkoutBankBegin']>)=>Promise<ReturnType<MerchantDO['checkoutBankBegin']>>;
   checkoutBankVerify:(...args:Parameters<MerchantDO['checkoutBankVerify']>)=>Promise<ReturnType<MerchantDO['checkoutBankVerify']>>;
   checkoutBankClose:(...args:Parameters<MerchantDO['checkoutBankClose']>)=>Promise<ReturnType<MerchantDO['checkoutBankClose']>>;

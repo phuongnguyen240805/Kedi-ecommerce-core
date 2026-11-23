@@ -20,6 +20,18 @@ kv = importlib.util.module_from_spec(kv_spec)
 kv_spec.loader.exec_module(kv)
 
 class DeploymentConfigTests(unittest.TestCase):
+    def test_pod_r2_is_explicit_and_never_leaks_to_mcp_or_runtime_secrets(self):
+        for worker in ('merchant', 'mcp'):
+            with tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);base=root/'base.json';env=root/'settings.env';out=root/'generated.json'
+                base.write_text(json.dumps({'name':worker}),encoding='utf-8')
+                env.write_text('POD_R2_BUCKET_NAME=fixture-artworks\nPOD_NEW_PIPELINE_ENABLED=false\n',encoding='utf-8')
+                run=subprocess.run([sys.executable,str(SCRIPT),'--skip-routes',str(env),str(base),str(out)],capture_output=True,text=True)
+                self.assertEqual(run.returncode,0,run.stderr)
+                config=json.loads(out.read_text(encoding='utf-8'))
+                self.assertEqual(config.get('r2_buckets'),[{'binding':'IMAGES','bucket_name':'fixture-artworks'}] if worker=='merchant' else None)
+                self.assertNotIn('POD_R2_BUCKET_NAME',json.loads((root/'secrets.json').read_text(encoding='utf-8')))
+
     def test_jsonc_preserves_urls_comment_markers_and_escaped_quotes_in_strings(self):
         original = {'vars': {'STORE_URL': 'https://store.test/a//b', 'VALUE': 'text "quoted" /* literal */ \\ end'}}
         encoded = '// leading comment\n' + json.dumps(original) + '\n/* trailing comment */'

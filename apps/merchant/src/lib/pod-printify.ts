@@ -58,10 +58,13 @@ export class PrintifyClient {
  async get(id:string,reference:string){return this.verify(await this.request(`orders/${encodeURIComponent(id)}.json`),reference);}
  async find(reference:string){
   for(let page=1;page<=10;page++){
-   const raw=z.object({data:z.array(order)}).parse(await this.request(`orders.json?page=${page}&limit=100`));
+   const raw=z.object({data:z.array(order),current_page:z.number().int().positive().optional(),last_page:z.number().int().nonnegative().optional()}).parse(await this.request(`orders.json?page=${page}&limit=50`));
    const found=raw.data.filter(o=>o.metadata.shop_order_id===reference);
    if(found.length>1)throw new ShippingError('pod_duplicate_reference',409,'Multiple provider orders match this reference.');
-   if(found.length)return found[0];if(raw.data.length<100)return null;
+   if(found.length)return found[0];
+   if(raw.current_page===undefined||raw.last_page===undefined){if(!raw.data.length)return null;throw new ShippingError('pod_lookup_incomplete',409,'Provider pagination metadata is missing.');}
+   if(raw.current_page!==page)throw new ShippingError('pod_lookup_incomplete',409,'Provider pagination changed.');
+   if(page>=raw.last_page)return null;
   }
   throw new ShippingError('pod_lookup_incomplete',409,'Provider lookup did not complete.');
  }

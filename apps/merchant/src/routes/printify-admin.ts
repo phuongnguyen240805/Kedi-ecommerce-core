@@ -20,7 +20,7 @@ export function printifyAdmin(transport:typeof fetch=fetch){
     const [count]=await c.var.db.query<{n:number}>("SELECT COUNT(*) n FROM pod_mappings WHERE json_extract(config,'$.enabled')=1",[]);
     return c.json({storage_configured:!!c.env.IMAGES,provider_configured:!!c.env.PRINTIFY_API_TOKEN&&!!c.env.PRINTIFY_SHOP_ID,
       signing_configured:(c.env.ORDER_TOKEN_SECRET?.length||0)>=32,stripe_configured:!!c.env.STRIPE_SECRET_KEY,
-      pod_enabled:c.env.POD_ENABLED==='true',submit_enabled:c.env.POD_SUBMIT_ENABLED==='true',account_verified:c.env.POD_ACCOUNT_AUTOMATION_VERIFIED==='true',active_mappings:Number(count?.n||0)});
+      pod_enabled:c.env.POD_ENABLED==='true',staged_enabled:c.env.POD_NEW_PIPELINE_ENABLED==='true',submit_enabled:c.env.POD_SUBMIT_ENABLED==='true',account_verified:c.env.POD_ACCOUNT_AUTOMATION_VERIFIED==='true',active_mappings:Number(count?.n||0)});
   });
   api.get('/mappings',async c=>{await c.var.db.podInit();return c.json({items:await c.var.db.query('SELECT sku,version,config FROM pod_mappings ORDER BY sku LIMIT 100',[])});});
   api.get('/connection',async c=>c.json(await client(c.env).connection()));

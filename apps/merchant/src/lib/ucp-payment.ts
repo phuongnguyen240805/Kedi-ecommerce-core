@@ -1,3 +1,4 @@
+import {activateCheckoutFulfillment} from './checkout-fulfillment';
 import {quoteCheckout,type CheckoutInput} from './checkout-core';
 import { z } from 'zod';
 import type Stripe from 'stripe';
@@ -26,6 +27,9 @@ CREATE TABLE IF NOT EXISTS payment_outbox (
 );`;
 
 const money = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+// Presentation fields are additive: historical quotes still compare every
+// price/quantity/tax/stock field without requiring an image-schema migration.
+function comparableLines(lines:Record<string,unknown>[]){return lines.map(line=>{const result={...line};delete result.product_title;delete result.variant_title;delete result.image_url;return result;});}
 const item = z.object({
  item: z.object({ id: z.string().min(1), title: z.string().optional() }),
  quantity: z.number().int().min(1).max(1000),
@@ -71,7 +75,7 @@ export function checkoutReturnUrl(value: string | undefined, fallback: string, o
  return url.toString();
 }
 
-export function beginUcpPayment(sql: ShippingSql, sessionId: string, successUrl: string, cancelUrl: string, now = Date.now(), expected?:{version:number;total:number}, choice?:{method:'techcombank_qr';bank:{account_number:string;account_name:string}}) {
+export function beginUcpPayment(sql: ShippingSql, sessionId: string, successUrl: string, cancelUrl: string, now = Date.now(), expected?:{version:number;total:number}, choice?:{method:'techcombank_qr';bank:{account_number:string;account_name:string}}|{method:'cod'}) {
  const session = sql.exec('SELECT * FROM ucp_checkout_sessions WHERE id=?', sessionId).toArray()[0];
  if (!session) fail('checkout_not_found', 'Checkout not found.');
  if(expected){const [draft]=sql.exec('SELECT version,snapshot_json FROM checkout_drafts WHERE id=?',sessionId).toArray();if(!draft||Number(draft.version)!==expected.version||Number(JSON.parse(String(draft.snapshot_json)).total)!==expected.total)fail('checkout_quote_changed','Quote changed before payment; review the current total.');}
@@ -87,7 +91,7 @@ export function beginUcpPayment(sql: ShippingSql, sessionId: string, successUrl:
  if (session.status !== 'ready_for_complete' || Date.parse(String(session.expires_at)) <= now ||
      !Number.isFinite(Date.parse(String(session.expires_at)))) fail('checkout_not_ready', 'Checkout is not ready or has expired.');
  const snapshot = paymentSnapshot(session);
- if(expected){const [draft]=sql.exec('SELECT input_json,snapshot_json FROM checkout_drafts WHERE id=?',sessionId).toArray();const fresh=quoteCheckout(sql,JSON.parse(String(draft.input_json)) as CheckoutInput,sessionId),frozen=JSON.parse(String(draft.snapshot_json));if(fresh.status!=='ready_for_complete'||fresh.total!==expected.total||fresh.subtotal!==frozen.subtotal||fresh.tax!==frozen.tax||fresh.shipping!==frozen.shipping||JSON.stringify(fresh.line_items)!==JSON.stringify(frozen.line_items))fail('checkout_quote_changed','Prices, stock, tax or delivery changed; request a new quote.');}
+ if(expected){const [draft]=sql.exec('SELECT input_json,snapshot_json FROM checkout_drafts WHERE id=?',sessionId).toArray();const fresh=quoteCheckout(sql,JSON.parse(String(draft.input_json)) as CheckoutInput,sessionId),frozen=JSON.parse(String(draft.snapshot_json));if(fresh.status!=='ready_for_complete'||fresh.total!==expected.total||fresh.subtotal!==frozen.subtotal||fresh.tax!==frozen.tax||fresh.shipping!==frozen.shipping||JSON.stringify(comparableLines(fresh.line_items))!==JSON.stringify(comparableLines(frozen.line_items)))fail('checkout_quote_changed','Prices, stock, tax or delivery changed; request a new quote.');}
  for(const item of snapshot.items){
   if(item.fulfillment_mode!=='stock')continue;
   const [inventory]=sql.exec('SELECT on_hand,reserved FROM inventory WHERE sku=?',item.item.id).toArray();
@@ -115,7 +119,7 @@ export function beginUcpPayment(sql: ShippingSql, sessionId: string, successUrl:
  if(hasDrafts){const [draft]=sql.exec('SELECT snapshot_json FROM checkout_drafts WHERE id=?',sessionId).toArray();if(draft){const state=JSON.parse(String(draft.snapshot_json));if(state.physical&&state.address)request.payment_intent_data={shipping:{name:state.address.name,...(state.address.phone?{phone:state.address.phone}:{}),address:{line1:state.address.line_one,line2:state.address.line_two,city:state.address.city,state:state.address.state,country:state.address.country,postal_code:state.address.postal_code}}};}}
  const time = new Date(now).toISOString();
  if(hasDrafts&&sql.exec('SELECT id FROM checkout_drafts WHERE id=?',sessionId).toArray().length){
-  sql.exec('INSERT INTO checkout_payment_choices VALUES(?,?,?,?,?,?)',sessionId,choice?.method||'stripe',choice?JSON.stringify(choice.bank):null,'KM'+crypto.randomUUID().replaceAll('-','').slice(0,20).toUpperCase(),now+3600000,time);
+  sql.exec('INSERT INTO checkout_payment_choices VALUES(?,?,?,?,?,?)',sessionId,choice?.method||'stripe',choice?.method==='techcombank_qr'?JSON.stringify(choice.bank):null,'KM'+crypto.randomUUID().replaceAll('-','').slice(0,20).toUpperCase(),now+3600000,time);
   const orderId=crypto.randomUUID(),number='ORD-'+orderId;
   sql.exec("INSERT INTO orders(id,number,status,customer_email,subtotal_cents,tax_cents,shipping_cents,total_cents,currency,created_at) VALUES(?,?,'pending',?,?,?,?,?,?,?)",orderId,number,snapshot.email,snapshot.subtotal,snapshot.tax,snapshot.shipping,snapshot.amount,snapshot.currency,time);
   const [draft]=sql.exec('SELECT snapshot_json FROM checkout_drafts WHERE id=?',sessionId).toArray();const state=JSON.parse(String(draft.snapshot_json)),a=state.address;if(a)sql.exec('UPDATE orders SET shipping_name=?,shipping_phone=?,ship_to=?,shipping_rate_id=? WHERE id=?',a.name,a.phone,JSON.stringify({line1:a.line_one,line2:a.line_two,city:a.city,state:a.state,country:a.country,postal_code:a.postal_code}),state.selected_shipping_option_id,orderId);
@@ -188,6 +192,7 @@ export function settleUcpPayment(sql: ShippingSql, raw: SettlementInput, now = D
  sql.exec("UPDATE ucp_checkout_sessions SET status='completed',stripe_session_id=?,order_id=?,order_number=?,updated_at=? WHERE id=?",
   provider==='stripe'?input.stripeId:null, orderId, number, time, input.sessionId);
  if (attempt&&provider==='stripe') sql.exec('UPDATE ucp_payment_attempts SET stripe_session_id=? WHERE session_id=?', input.stripeId, input.sessionId);
+ activateCheckoutFulfillment(sql,input.sessionId);
  return { paid: true, orderId };
 }
 

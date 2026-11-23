@@ -17,6 +17,21 @@ export async function reconcileStripeCheckout(db:DOStub,env:Env,id:string){
  const session=await new Stripe(await stripeKey(db,env)).checkout.sessions.retrieve(attempt.stripe_session_id);
  await applyStripeCheckout(db,id,session);
 }
+export async function closeStripeForPaymentChange(db:DOStub,env:Env,id:string,provider?:Pick<Stripe['checkout']['sessions'],'retrieve'|'create'|'expire'>){
+ const [attempt]=await db.query<{stripe_session_id:string|null;request_json:string;created_at:string}>('SELECT stripe_session_id,request_json,created_at FROM ucp_payment_attempts WHERE session_id=?',[id]);
+ if(!attempt)throw new ShippingError('payment_not_bound',409,'Payment needs merchant review.');
+ const sessions=provider||new Stripe(await stripeKey(db,env)).checkout.sessions;
+ if(!attempt.stripe_session_id&&Date.now()-Date.parse(attempt.created_at)>=23*3600000)throw new ShippingError('payment_outcome_unknown',409,'Payment needs merchant review.');
+ let session=attempt.stripe_session_id?await sessions.retrieve(attempt.stripe_session_id):await sessions.create(JSON.parse(attempt.request_json),{idempotencyKey:`ucp-checkout:${id}`});
+ if(session.metadata?.ucp_checkout_session_id!==id)throw new ShippingError('payment_binding_conflict',409,'Payment needs merchant review.');
+ if(!attempt.stripe_session_id){if(!session.url)throw new ShippingError('payment_outcome_unknown',409,'Payment needs merchant review.');await db.ucpPaymentAttach(id,session.id,session.url);}
+ if(session.status==='open'){
+  try{session=await sessions.expire(session.id);}catch{session=await sessions.retrieve(session.id);}
+ }
+ if(session.payment_status==='paid')await applyStripeCheckout(db,id,session);
+ if(session.status!=='expired'||session.payment_status!=='unpaid')throw new ShippingError('payment_processing',409,'Thanh toán đã nhận hoặc đang xử lý. Không thanh toán lại; kiểm tra trạng thái hoặc liên hệ cửa hàng.');
+ return session.id;
+}
 export async function startStripeCheckout(db:DOStub,env:Env,id:string,base:string,success?:string,cancel?:string,expected?:{version:number;total:number}){
  const key=await stripeKey(db,env);
  const origins=[base,...(env.STORE_URL?[env.STORE_URL]:[])];

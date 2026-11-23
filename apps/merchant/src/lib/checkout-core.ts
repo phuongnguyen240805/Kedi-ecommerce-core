@@ -1,3 +1,4 @@
+import {checkoutFulfillmentStatus} from './checkout-fulfillment';
 import {z} from 'zod';
 import {readCheckoutCarrier} from './checkout-carrier';
 import type {ShippingSql} from './shipping-store';
@@ -7,15 +8,25 @@ CREATE TABLE IF NOT EXISTS checkout_drafts(id TEXT PRIMARY KEY,source TEXT NOT N
 CREATE TABLE IF NOT EXISTS checkout_idempotency(scope TEXT NOT NULL,key TEXT NOT NULL,request_json TEXT NOT NULL,response_json TEXT NOT NULL,PRIMARY KEY(scope,key));
 CREATE TABLE IF NOT EXISTS checkout_reconcile_rates(id TEXT PRIMARY KEY,next_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS checkout_recoveries(original_id TEXT PRIMARY KEY,checkout_id TEXT NOT NULL UNIQUE);
+CREATE TABLE IF NOT EXISTS checkout_payment_changes(original_id TEXT PRIMARY KEY,replacement_id TEXT NOT NULL UNIQUE,previous_method TEXT NOT NULL,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS checkout_carrier_quotes(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,binding_json TEXT NOT NULL,options_json TEXT NOT NULL,context TEXT NOT NULL,expires_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS checkout_handoffs(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,created_at INTEGER NOT NULL);
 `;
 const money=z.number().int().nonnegative().max(1_000_000_000);
 export const checkoutAddress=z.object({province_id:z.number().int().positive().optional(),district_id:z.number().int().positive().optional(),ward_code:z.string().regex(/^[A-Za-z0-9]{1,12}$/).optional(),name:z.string().trim().min(2).max(100),phone:z.string().max(30).default(''),line_one:z.string().trim().min(5).max(300),line_two:z.string().max(200).default(''),city:z.string().trim().min(1).max(100),state:z.string().max(100).default(''),country:z.string().regex(/^[A-Z]{2}$/),postal_code:z.string().trim().min(1).max(30)}).strict();
-export const checkoutInput=z.object({currency:z.string().regex(/^[A-Za-z]{3}$/).transform(v=>v.toUpperCase()),line_items:z.array(z.object({id:z.string().min(1).max(200),quantity:z.number().int().min(1).max(99)}).strict()).min(1).max(50),buyer:z.object({email:z.string().trim().email().max(254)}).strict().optional(),address:checkoutAddress.optional(),carrier_quote_id:z.string().uuid().nullable().optional(),shipping_option_id:z.string().max(100).optional()}).strict();
+export const checkoutInput=z.object({payment_method:z.enum(['stripe','techcombank_qr','cod']).optional(),currency:z.string().regex(/^[A-Za-z]{3}$/).transform(v=>v.toUpperCase()),line_items:z.array(z.object({id:z.string().min(1).max(200),quantity:z.number().int().min(1).max(99)}).strict()).min(1).max(50),buyer:z.object({email:z.string().trim().email().max(254)}).strict().optional(),address:checkoutAddress.optional(),carrier_quote_id:z.string().uuid().nullable().optional(),shipping_option_id:z.string().max(100).optional()}).strict();
 export type CheckoutInput=z.infer<typeof checkoutInput>;
 export type CheckoutSnapshot=ReturnType<typeof quoteCheckout>;
 const fail=(code:string,message:string,status=409):never=>{throw new ShippingError(code,status,message);};
+function checkoutImage(sql:ShippingSql,variant:Record<string,unknown>){
+ const candidates=[variant.image_url,variant.thumbnail_url,variant.product_image];
+ if(!candidates.some(Boolean)&&sql.exec("SELECT name FROM sqlite_master WHERE name='storefront_content'").toArray().length){
+  const [row]=sql.exec("SELECT data FROM storefront_content WHERE kind='product-metadata' AND id=?",variant.product_id).toArray();
+  if(row){try{candidates.push(JSON.parse(String(row.data)).source_image_url);}catch{/* Invalid optional display metadata must not break checkout. */}}
+ }
+ for(const value of candidates){if(typeof value!=='string')continue;try{const url=new URL(value);if(url.protocol==='https:'&&!url.username&&!url.password)return url.href;}catch{/* Try the next store-owned image. */}}
+ return null;
+}
 export function taxRate(sql:ShippingSql,country:string|undefined,code:string|null){
  const rates=sql.exec("SELECT * FROM tax_rates WHERE status='active' AND (country_code=? OR country_code IS NULL) AND (tax_code=? OR tax_code IS NULL)",country||'',code).toArray();
  const score=(r:Record<string,unknown>)=>(r.country_code===country?2:0)+(r.tax_code===code&&code!==null?1:0);
@@ -39,7 +50,7 @@ export function quoteCheckout(sql:ShippingSql,raw:CheckoutInput,owner?:string){
   const price=money.positive().parse(v.resolved_price),rate=input.address&&regions.length?taxRate(sql,input.address.country,v.tax_code as string|null):0;
   const unit=inclusive?Math.round(price/(1+rate/100)):price,net=money.parse(unit*line.quantity),lineTax=money.parse(inclusive?price*line.quantity-net:Math.round(net*rate/100));subtotal+=net;tax+=lineTax;
   if(v.requires_shipping!==0){physical=true;if(!Number.isFinite(v.weight_g)||Number(v.weight_g)<=0)messages.push({code:'weight_missing',content:'The merchant must configure product shipping weight'});weight+=Number(v.weight_g||0)*line.quantity;if(v.shipping_class_id||v.product_shipping_class)messages.push({code:'shipping_context_required',content:'This product needs a merchant shipping quote'});}
-  return {id:String(v.id),sku:String(v.sku),title:String(v.title||v.product_title),quantity:line.quantity,unit_price:unit,display_unit_price:price,subtotal:net,tax:lineTax,total:net+lineTax,requires_shipping:v.requires_shipping!==0};
+  return {id:String(v.id),sku:String(v.sku),title:String(v.title||v.product_title),product_title:String(v.product_title),variant_title:String(v.title||v.sku),image_url:checkoutImage(sql,v),quantity:line.quantity,unit_price:unit,display_unit_price:price,subtotal:net,tax:lineTax,total:net+lineTax,requires_shipping:v.requires_shipping!==0};
  });
  if(physical&&!input.address)messages.push({code:'address_required',content:'Enter your delivery address'});
  if(physical&&input.address&&!regions.length)messages.push({code:'destination_unavailable',content:'This destination is not configured for this currency'});
@@ -56,7 +67,11 @@ export function checkoutRead(sql:ShippingSql,id:string){
  const [d]=sql.exec('SELECT d.*,s.status,s.expires_at,s.order_id,s.order_number FROM checkout_drafts d JOIN ucp_checkout_sessions s ON s.id=d.id WHERE d.id=?',id).toArray();if(!d)fail('checkout_not_found','Checkout not found',404);
  const [payment]=sql.exec('SELECT method,bank_json,reference,expires_at FROM checkout_payment_choices WHERE session_id=?',id).toArray();
  const legacyStripe=!payment&&sql.exec('SELECT session_id FROM ucp_payment_attempts WHERE session_id=?',id).toArray().length;
- return {payment:payment?{method:String(payment.method),...(payment.method==='techcombank_qr'?{bank:JSON.parse(String(payment.bank_json)),reference:String(payment.reference),amount:(JSON.parse(String(d.snapshot_json)) as CheckoutSnapshot).total,currency:'VND',expires_at:new Date(Number(payment.expires_at)).toISOString(),expired:Number(payment.expires_at)<=Date.now(),verification:'manual_bank_statement'}:{})}:legacyStripe?{method:'stripe'}:null,id,version:Number(d.version),...(JSON.parse(String(d.snapshot_json)) as CheckoutSnapshot),status:Date.parse(String(d.expires_at))<=Date.now()&&!['completed','complete_in_progress','canceled'].includes(String(d.status))?'expired':String(d.status),expires_at:String(d.expires_at),order_id:d.order_id?String(d.order_id):null,order_number:d.order_number?String(d.order_number):null,source:String(d.source),claimed:d.claimed===1};
+ const fulfillment=checkoutFulfillmentStatus(sql,d.order_id);
+ const chosen=JSON.parse(String(d.snapshot_json)).selected_shipping_option_id?.match(/^carrier:([0-9a-f-]{36}):/i)?.[1];
+ const expiry=chosen?sql.exec('SELECT expires_at FROM checkout_carrier_quotes WHERE id=? AND session_id=?',chosen,id).toArray()[0]?.expires_at:null;
+ const deliveryExpires=expiry?new Date(Number(expiry)).toISOString():null;
+ return {delivery_quote_expires_at:deliveryExpires,fulfillment,payment:payment?{method:String(payment.method),...(payment.method==='techcombank_qr'?{bank:JSON.parse(String(payment.bank_json)),reference:String(payment.reference),amount:(JSON.parse(String(d.snapshot_json)) as CheckoutSnapshot).total,currency:'VND',expires_at:new Date(Number(payment.expires_at)).toISOString(),expired:Number(payment.expires_at)<=Date.now(),verification:'manual_bank_statement'}:payment.method==='cod'?{amount:(JSON.parse(String(d.snapshot_json)) as CheckoutSnapshot).total,currency:'VND',payment_status:fulfillment?.payment_status||'unpaid',cod_status:fulfillment?.cod_status||'to_collect',reference:String(payment.reference)}:{})}:legacyStripe?{method:'stripe'}:null,id,version:Number(d.version),...(JSON.parse(String(d.snapshot_json)) as CheckoutSnapshot),status:Date.parse(String(d.expires_at))<=Date.now()&&!['completed','complete_in_progress','canceled'].includes(String(d.status))?'expired':String(d.status),expires_at:String(d.expires_at),order_id:d.order_id?String(d.order_id):null,order_number:d.order_number?String(d.order_number):null,source:String(d.source),claimed:d.claimed===1};
 }
 export function checkoutSave(sql:ShippingSql,raw:CheckoutInput,source:string,id:string=crypto.randomUUID(),expectedVersion?:number){
  const [old]=sql.exec('SELECT d.*,s.status,s.expires_at FROM checkout_drafts d JOIN ucp_checkout_sessions s ON s.id=d.id WHERE d.id=?',id).toArray();
@@ -73,5 +88,5 @@ export function checkoutCommand<T>(sql:ShippingSql,scope:string,key:string,raw:u
 }
 export function checkoutCancel(sql:ShippingSql,id:string,source:string){const current=checkoutRead(sql,id);if(current.source!==source)fail('checkout_not_found','Checkout not found',404);if(['complete_in_progress','completed'].includes(current.status))fail('checkout_locked','Payment must be reconciled before cancellation');sql.exec("UPDATE ucp_checkout_sessions SET status='canceled',updated_at=? WHERE id=?",new Date().toISOString(),id);return checkoutRead(sql,id);}
 
-export type CheckoutRpcCommand={action:'get';id:string}|{action:'create';input:CheckoutInput;source:string;key:string}|{action:'update';id:string;patch:Partial<CheckoutInput>;source:string;key:string;version?:number;browser?:boolean}|{action:'cancel';id:string;source:string;key:string}|{action:'redeem';id:string};
+export type CheckoutRpcCommand={action:'get';id:string}|{action:'change-payment';id:string;version:number;expiredStripeId?:string}|{action:'create';input:CheckoutInput;source:string;key:string}|{action:'update';id:string;patch:Partial<CheckoutInput>;source:string;key:string;version?:number;browser?:boolean}|{action:'cancel';id:string;source:string;key:string}|{action:'redeem';id:string};
 export type CheckoutRpcResult={ok:true;value:ReturnType<typeof checkoutRead>}|{ok:false;error:{code:string;status:number;message:string}};

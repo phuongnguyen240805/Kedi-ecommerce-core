@@ -2,7 +2,8 @@ import {useEffect,useRef,useState} from 'react';
 import DefaultLayout from '@/layouts/default';
 import {useAuth,useSecuredApi} from '@/authentication';
 import {getApiBase} from '@/lib/api-base';
-type Readiness={storage_configured:boolean;provider_configured:boolean;signing_configured:boolean;stripe_configured:boolean;pod_enabled:boolean;submit_enabled:boolean;account_verified:boolean;active_mappings:number};
+import {PodV2Panel} from './PodV2Panel';
+type Readiness={storage_configured:boolean;provider_configured:boolean;signing_configured:boolean;stripe_configured:boolean;pod_enabled:boolean;staged_enabled?:boolean;submit_enabled:boolean;account_verified:boolean;active_mappings:number};
 type Artwork={id:string;cart_id:string;width:number;height:number;approved_at:number|null;cart_status:string};
 type Job={id:string;order_id:string;state:string;external_id:string|null;status_json:string|null};
 const button='rounded-lg border px-4 py-2 disabled:opacity-40';
@@ -35,5 +36,6 @@ export default function PodOperations(){
  {ready?.pod_enabled&&<><section className="space-y-3"><h2 className="text-xl font-semibold">Duyệt file in</h2>{!artworks.length&&<p>Chưa có artwork.</p>}<div className="grid gap-3 sm:grid-cols-2">{artworks.map(art=><article className="rounded-lg border p-3" key={art.id}><p>{art.id}</p><p>{art.width} × {art.height} px · {art.approved_at?'Đã duyệt':'Chưa duyệt'} · {art.cart_status}</p><button className={button} disabled={busy||art.cart_status!=='open'} onClick={()=>void inspect(art)}>Xem file {art.id}</button></article>)}</div>
  {selected&&preview&&<div className="space-y-3 rounded-lg border p-4"><img src={preview} alt="File in cần duyệt" className="max-h-96 max-w-full object-contain"/><label className="block">Bằng chứng đánh giá<textarea className="block w-full rounded border p-3" maxLength={800} value={evidence} disabled={busy} onChange={e=>setEvidence(e.target.value)}/></label><label className="block"><input type="checkbox" checked={reviewed} disabled={busy} onChange={e=>setReviewed(e.target.checked)}/> Tôi đã xem file thực tế, kiểm tra chất lượng, vị trí in và quyền sử dụng.</label><button className={button} disabled={busy||!reviewed||evidence.trim().length<10} onClick={()=>void review(true)}>Duyệt artwork</button><button className={button} disabled={busy||evidence.trim().length<10} onClick={()=>void review(false)}>Từ chối artwork</button></div>}</section>
  <section className="space-y-3"><h2 className="text-xl font-semibold">Đơn sản xuất và ngoại lệ</h2><p>Đối soát đơn đã có mã Printify chỉ cập nhật trạng thái. Không tạo lại đơn khi kết quả gửi chưa rõ; hủy/hoàn tiền cần xử lý riêng với nhà in và bộ phận thanh toán.</p>{!jobs.length&&<p>Chưa có fulfillment.</p>}{jobs.map(job=><article className="space-y-2 rounded-lg border p-3" key={job.id}><p>Đơn {job.order_id}</p><p>{job.state} · {job.external_id||'Chưa có mã nhà in'}</p>{job.status_json&&<pre className="overflow-x-auto text-sm">{job.status_json}</pre>}<button className={button} disabled={busy||!job.external_id} onClick={()=>void reconcile(job)}>Cập nhật trạng thái {job.id}</button></article>)}</section></>}
+ {ready?.pod_enabled&&ready.staged_enabled&&<PodV2Panel base={base}/>}
  </main></DefaultLayout>;
 }

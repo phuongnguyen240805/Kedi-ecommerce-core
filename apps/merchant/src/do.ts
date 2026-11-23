@@ -1,3 +1,5 @@
+import {FULFILLMENT_SCHEMA,prepareCheckoutFulfillment,type FulfillmentConfig} from './lib/checkout-fulfillment';
+import {beginCodPayment} from './lib/checkout-payments';
 import {expireOpenCarts,repairLegacyReservationDeficits} from './lib/cart-maintenance';
 import {ensureCartItemCurrency,ensureOrderCheckoutSchema} from './lib/cart-schema';
 import {STOREFRONT_MIGRATION_SCHEMA,importStorefrontCatalog,provisionStorefrontAccess} from './lib/storefront-migration';
@@ -8,6 +10,7 @@ import {saveCheckoutCarrier} from './lib/checkout-carrier';
 import {checkoutReadiness} from './lib/checkout-readiness';
 import {ShippingError} from './lib/smart-shipping';
 import {CHECKOUT_SCHEMA,checkoutInput,checkoutRead,checkoutSave,checkoutCommand,checkoutCancel,type CheckoutInput as RetailCheckoutInput} from './lib/checkout-core';
+import {changeCheckoutPayment} from './lib/checkout-payment-change';
 import {EXPERIMENT_SCHEMA,createExperiment,marketingRfm,experimentReport} from './lib/marketing-admin';
 import * as shippingFlow from './lib/shipping-workflow';
 /**
@@ -39,6 +42,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { UCP_PAYMENT_SCHEMA, beginUcpPayment, attachUcpPayment, expireUcpPayment, settleUcpPayment, type SettlementInput } from './lib/ucp-payment';
 import {POD_SCHEMA,approvePodArtwork,reviewPodArtwork,savePodMappingDraft,podQuotePlan,storePodQuote,checkoutPodQuote,claimPodFulfillment,finishPodFulfillment,type PodQuoteInput} from './lib/pod-core';
 import {MARKETING_SCHEMA,subscribeMarketing,confirmMarketing,unsubscribeMarketing,planMarketing,claimMarketing,marketingEligible,finishMarketing,recordMarketingEvent,legacyMarketingRecoverable,type SubscriptionInput} from './lib/marketing-core';
+import {POD_V2_SCHEMA,podV2Command,type PodV2Command} from './lib/pod-v2-store';
 import {FEED_SCHEMA,feedSnapshot,putFeedOffer,type FeedOffer} from './lib/product-feeds';
 import {SHOPPING_SCHEMA,consumeShopping,allowShoppingAi,type ShoppingSelection} from './lib/shopping';
 import { STOREFRONT_CONTENT_SCHEMA } from './lib/storefront-content';
@@ -1424,6 +1428,7 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
   checkoutRpc(command:import('./lib/checkout-core').CheckoutRpcCommand):import('./lib/checkout-core').CheckoutRpcResult{
     try{let value:ReturnType<typeof checkoutRead>;switch(command.action){
      case 'get':value=this.checkoutGet(command.id);break;
+     case 'change-payment':this.checkoutInit();value=this.ctx.storage.transactionSync(()=>changeCheckoutPayment(this.sql,command.id,command.version,command.expiredStripeId));break;
      case 'create':value=this.checkoutCreate(command.input,command.source,command.key);break;
      case 'update':value=this.checkoutUpdate(command.id,command.patch,command.source,command.key,command.version,command.browser);break;
      case 'cancel':value=this.checkoutCancel(command.id,command.source,command.key);break;
@@ -1431,15 +1436,17 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
      default:throw new ShippingError('unsupported_checkout_operation',400,'Unsupported checkout operation');
     }return {ok:true,value};}catch(error){if(error instanceof ShippingError)return {ok:false,error:{code:error.code,status:error.status,message:error.message}};if(error instanceof Error&&error.name==='ZodError')return {ok:false,error:{code:'invalid_input',status:400,message:'Invalid checkout input'}};throw error;}
   }
+  checkoutFulfillmentPrepare(id:string,method:'stripe'|'techcombank_qr'|'cod',config:FulfillmentConfig){this.checkoutInit();this.ensureCommerceStorage();return this.ctx.storage.transactionSync(()=>prepareCheckoutFulfillment(this.sql,id,method,config));}
+  checkoutCodBegin(id:string,expected:{version:number;total:number}){this.checkoutInit();this.ensureCommerceStorage();return this.ctx.storage.transactionSync(()=>beginCodPayment(this.sql,id,expected));}
   checkoutBankBegin(id:string,expected:{version:number;total:number},bank:{account_number:string;account_name:string}){this.checkoutInit();return this.ctx.storage.transactionSync(()=>beginBankPayment(this.sql,id,expected,bank));}
   checkoutBankVerify(id:string,input:Parameters<typeof verifyBankPayment>[2],actor:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>verifyBankPayment(this.sql,id,input,actor));}
   checkoutBankClose(id:string,actor:string,evidence:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>closeBankPayment(this.sql,id,actor,evidence));}
   storefrontImport(input:Parameters<typeof importStorefrontCatalog>[1],actor:string){this.ensureInitialized();ensureSchemaObjects(this.sql,STOREFRONT_CONTENT_SCHEMA);ensureSchemaObjects(this.sql,STOREFRONT_MIGRATION_SCHEMA);return this.ctx.storage.transactionSync(()=>importStorefrontCatalog(this.sql,input,actor));}
   storefrontAccess(input:Parameters<typeof provisionStorefrontAccess>[1]){this.ensureInitialized();return this.ctx.storage.transactionSync(()=>provisionStorefrontAccess(this.sql,input));}
-  checkoutInit(){this.podInit();ensureSchemaObjects(this.sql,UCP_PAYMENT_SCHEMA);ensureSchemaObjects(this.sql,CHECKOUT_SCHEMA);}
+  checkoutInit(){this.podInit();ensureSchemaObjects(this.sql,UCP_PAYMENT_SCHEMA);ensureSchemaObjects(this.sql,CHECKOUT_SCHEMA);ensureSchemaObjects(this.sql,FULFILLMENT_SCHEMA);}
   checkoutReconcileAllow(id:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>{const now=Date.now(),[row]=this.sql.exec('SELECT next_at FROM checkout_reconcile_rates WHERE id=?',id).toArray();if(row&&Number(row.next_at)>now)return false;this.sql.exec('INSERT INTO checkout_reconcile_rates VALUES(?,?) ON CONFLICT(id) DO UPDATE SET next_at=excluded.next_at',id,now+10000);return true;});}
   checkoutReadiness(cursor:string,skus?:string[],carrierCountry?:string){this.checkoutInit();return checkoutReadiness(this.sql,cursor,skus,carrierCountry);}
-  checkoutCarrierSave(id:string,quoteId:string,version:number,options:Parameters<typeof saveCheckoutCarrier>[4],context:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>saveCheckoutCarrier(this.sql,id,quoteId,version,options,context));}
+  checkoutCarrierSave(id:string,quoteId:string,version:number,options:Parameters<typeof saveCheckoutCarrier>[4],context:string,execution?:unknown){this.checkoutInit();return this.ctx.storage.transactionSync(()=>saveCheckoutCarrier(this.sql,id,quoteId,version,options,context,Date.now(),execution));}
   checkoutGet(id:string){this.checkoutInit();return checkoutRead(this.sql,id);}
   checkoutCreate(raw:RetailCheckoutInput,source:string,key:string){this.checkoutInit();const input=checkoutInput.parse(raw);return this.ctx.storage.transactionSync(()=>checkoutCommand(this.sql,source+':create',key,input,()=>checkoutSave(this.sql,input,source)));}
   checkoutUpdate(id:string,patch:Partial<RetailCheckoutInput>,source:string,key:string,version?:number,browser=false){this.checkoutInit();return this.ctx.storage.transactionSync(()=>checkoutCommand(this.sql,source+':update:'+id,key,{patch,version:version??null,browser},()=>{
@@ -1449,6 +1456,8 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
   checkoutCancel(id:string,source:string,key:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>checkoutCommand(this.sql,source+':cancel:'+id,key,{},()=>checkoutCancel(this.sql,id,source)));}
   checkoutRedeem(id:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>{const current=checkoutRead(this.sql,id);if(current.claimed||['expired','canceled','completed','complete_in_progress'].includes(current.status))throw new ShippingError('handoff_closed',409,'Handoff is no longer available');this.sql.exec('INSERT INTO checkout_handoffs VALUES(?,?,?)',id,id,Date.now());this.sql.exec('UPDATE checkout_drafts SET claimed=1 WHERE id=?',id);return checkoutRead(this.sql,id);});}
   podInit() { this.ensureInitialized(); ensureSchemaObjects(this.sql,POD_SCHEMA); }
+  podV2Init(){this.podInit();ensureSchemaObjects(this.sql,POD_V2_SCHEMA);}
+  podV2(command:PodV2Command){this.podV2Init();return this.ctx.storage.transactionSync(()=>podV2Command(this.sql,command));}
   feedSnapshot(){this.podInit();ensureSchemaObjects(this.sql,FEED_SCHEMA);return this.ctx.storage.transactionSync(()=>feedSnapshot(this.sql));}
   shoppingAiAllow(client:string){this.ensureInitialized();ensureSchemaObjects(this.sql,SHOPPING_SCHEMA);return this.ctx.storage.transactionSync(()=>allowShoppingAi(this.sql,client));}
   shoppingConsume(id:string,selection:ShoppingSelection,expiresAt:number){this.podInit();ensureSchemaObjects(this.sql,FEED_SCHEMA);ensureSchemaObjects(this.sql,SHOPPING_SCHEMA);return this.ctx.storage.transactionSync(()=>consumeShopping(this.sql,feedSnapshot(this.sql).offers,id,selection,expiresAt));}
@@ -1472,7 +1481,7 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
   marketingEligible(id:string,token:string){this.marketingInit();return marketingEligible(this.sql,id,token);}
   marketingFinish(id:string,token:string,outcome:Parameters<typeof finishMarketing>[3],providerId?:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>finishMarketing(this.sql,id,token,outcome,providerId));}
   marketingEvent(input:Parameters<typeof recordMarketingEvent>[1]){this.marketingInit();return this.ctx.storage.transactionSync(()=>recordMarketingEvent(this.sql,input));}
-  podDue() { this.podInit();return this.sql.exec("SELECT id FROM pod_fulfillments WHERE (state IN ('queued','accepted','in_production','shipped','submission_unknown') OR (state='needs_review' AND external_id IS NOT NULL)) AND lease_until<? AND updated_at<? ORDER BY updated_at LIMIT 10",Date.now(),Date.now()-60_000).toArray().map(r=>({id:String(r.id)})); }
+  podDue() { this.podInit();return this.sql.exec("SELECT id FROM pod_fulfillments WHERE (state IN ('queued','accepted','in_production','partially_shipped','shipped','submission_unknown') OR (state='needs_review' AND external_id IS NOT NULL)) AND lease_until<? AND updated_at<? ORDER BY updated_at LIMIT 10",Date.now(),Date.now()-60_000).toArray().map(r=>({id:String(r.id)})); }
   podApprove(id:string,evidence:string) {this.podInit();return this.ctx.storage.transactionSync(()=>approvePodArtwork(this.sql,id,evidence));}
   podReview(id:string,evidence:string,approve:boolean) {this.podInit();return this.ctx.storage.transactionSync(()=>reviewPodArtwork(this.sql,id,evidence,approve));}
   podSaveDraft(sku:string,config:unknown,actor:string) {this.podInit();return this.ctx.storage.transactionSync(()=>savePodMappingDraft(this.sql,sku,config,actor));}

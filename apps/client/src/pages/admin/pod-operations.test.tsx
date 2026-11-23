@@ -16,6 +16,20 @@ test('enabled operations show locked review state and unknown submission cannot 
  await act(async()=>root.render(<PodOperations/>));const buttons=Array.from(element.querySelectorAll('button'));expect(buttons.find(b=>b.textContent==='Xem file art')?.disabled).toBe(true);expect(buttons.find(b=>b.textContent==='Cập nhật trạng thái job')?.disabled).toBe(true);expect(mockPost).not.toHaveBeenCalled();
 });
 test('operation errors display a sanitized message',async()=>{mockGet.mockRejectedValue(Error('secret'));await act(async()=>root.render(<PodOperations/>));expect(element.textContent).toContain('Không tải được vận hành POD');expect(element.textContent).not.toContain('secret');});
+
+test('staged production approval requires explicit evidence and confirmation and does not send production',async()=>{
+ mockGet.mockImplementation((url:string)=>Promise.resolve(url.includes('readiness')?{...ready,pod_enabled:true,staged_enabled:true}:url.includes('/health')?{readiness:{storage_ready:false}}:{items:[]}));
+ await act(async()=>root.render(<PodOperations/>));
+ const button=()=>Array.from(element.querySelectorAll('button')).find(b=>b.textContent==='Ghi duyệt sản xuất cho đơn')!;
+ expect(button().disabled).toBe(true);
+ const fill=async(input:HTMLInputElement|HTMLTextAreaElement,value:string)=>{await act(async()=>{const proto=input.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value')!.set!.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}));});};
+ await fill(element.querySelector('textarea')!,'Reviewed exact snapshot, payment, provider IDs and print costs.');
+ const jobLabel=Array.from(element.querySelectorAll('label')).find(l=>l.textContent?.startsWith('Fulfillment ID'))!;await fill(jobLabel.querySelector('input')!,'fixture-job');expect(button().disabled).toBe(true);
+ const confirmation=Array.from(element.querySelectorAll('label')).find(l=>l.textContent?.includes('đồng ý cho đơn này sản xuất'))!;
+ await act(async()=>confirmation.querySelector<HTMLInputElement>('input')!.click());expect(button().disabled).toBe(false);
+ await act(async()=>button().click());expect(mockPost).toHaveBeenCalledTimes(1);expect(mockPost).toHaveBeenCalledWith('/v1/pod/v2/admin/fulfillments/fixture-job/approve-production',expect.objectContaining({evidence:'Reviewed exact snapshot, payment, provider IDs and print costs.'}));
+ expect(mockPost.mock.calls.some(([url])=>String(url).includes('send_to_production'))).toBe(false);
+});
 test('approval requires actual preview, review confirmation and evidence before sending',async()=>{
  mockGet.mockImplementation((url:string)=>Promise.resolve(url.includes('readiness')?{...ready,pod_enabled:true}:url.includes('artworks')?{items:[{id:'art',cart_id:'cart',width:100,height:100,approved_at:null,cart_status:'open'}]}:{items:[]}));
  const oldFetch=globalThis.fetch;const oldCreate=URL.createObjectURL,oldRevoke=URL.revokeObjectURL;
