@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS payment_outbox (
 );`;
 
 const money = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+// Presentation fields are additive: historical quotes still compare every
+// price/quantity/tax/stock field without requiring an image-schema migration.
+function comparableLines(lines:Record<string,unknown>[]){return lines.map(line=>{const result={...line};delete result.product_title;delete result.variant_title;delete result.image_url;return result;});}
 const item = z.object({
  item: z.object({ id: z.string().min(1), title: z.string().optional() }),
  quantity: z.number().int().min(1).max(1000),
@@ -88,7 +91,7 @@ export function beginUcpPayment(sql: ShippingSql, sessionId: string, successUrl:
  if (session.status !== 'ready_for_complete' || Date.parse(String(session.expires_at)) <= now ||
      !Number.isFinite(Date.parse(String(session.expires_at)))) fail('checkout_not_ready', 'Checkout is not ready or has expired.');
  const snapshot = paymentSnapshot(session);
- if(expected){const [draft]=sql.exec('SELECT input_json,snapshot_json FROM checkout_drafts WHERE id=?',sessionId).toArray();const fresh=quoteCheckout(sql,JSON.parse(String(draft.input_json)) as CheckoutInput,sessionId),frozen=JSON.parse(String(draft.snapshot_json));if(fresh.status!=='ready_for_complete'||fresh.total!==expected.total||fresh.subtotal!==frozen.subtotal||fresh.tax!==frozen.tax||fresh.shipping!==frozen.shipping||JSON.stringify(fresh.line_items)!==JSON.stringify(frozen.line_items))fail('checkout_quote_changed','Prices, stock, tax or delivery changed; request a new quote.');}
+ if(expected){const [draft]=sql.exec('SELECT input_json,snapshot_json FROM checkout_drafts WHERE id=?',sessionId).toArray();const fresh=quoteCheckout(sql,JSON.parse(String(draft.input_json)) as CheckoutInput,sessionId),frozen=JSON.parse(String(draft.snapshot_json));if(fresh.status!=='ready_for_complete'||fresh.total!==expected.total||fresh.subtotal!==frozen.subtotal||fresh.tax!==frozen.tax||fresh.shipping!==frozen.shipping||JSON.stringify(comparableLines(fresh.line_items))!==JSON.stringify(comparableLines(frozen.line_items)))fail('checkout_quote_changed','Prices, stock, tax or delivery changed; request a new quote.');}
  for(const item of snapshot.items){
   if(item.fulfillment_mode!=='stock')continue;
   const [inventory]=sql.exec('SELECT on_hand,reserved FROM inventory WHERE sku=?',item.item.id).toArray();
