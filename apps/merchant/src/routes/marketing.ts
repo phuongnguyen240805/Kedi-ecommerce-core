@@ -6,6 +6,7 @@ import {authMiddleware,adminOnly} from '../middleware/auth';
 import {ApiError,type HonoEnv} from '../types';
 import {subscriptionInput} from '../lib/marketing-core';
 import {verifyMarketingToken,verifyMailgunSignature} from '../lib/marketing-tokens';
+import {marketingPolicyInput,marketingJobDecision} from '../lib/marketing-policy';
 export const marketing=new Hono<HonoEnv>();
 async function json(request:Request){const reader=request.body?.getReader();if(!reader)throw ApiError.invalidRequest('JSON required');const chunks:Uint8Array[]=[];let size=0;while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>64000){await reader.cancel();throw ApiError.invalidRequest('Request too large');}chunks.push(value);}const bytes=new Uint8Array(size);let off=0;for(const chunk of chunks){bytes.set(chunk,off);off+=chunk.length;}return JSON.parse(new TextDecoder().decode(bytes));}
 marketing.get('/status',c=>c.json({enabled:c.env.MARKETING_ENABLED==='true',policy_version:c.env.MARKETING_POLICY_VERSION||null}));
@@ -34,6 +35,7 @@ marketing.post('/recovery',async c=>{
  let claims;try{claims=await verifyMarketingToken(c.env,token,'recovery');}catch{throw ApiError.invalidRequest('Invalid recovery link');}
  await c.var.db.marketingInit();
  if(claims.scope==='checkout'){const state=await c.var.db.marketingRecoverCheckout(z.string().uuid().parse(claims.checkout_id),claims.subscriber_id);return c.json({scope:'checkout',checkout_id:state.id});}
+ if(!await c.var.db.marketingLegacyRecoverable(z.string().uuid().parse(claims.cart_id),claims.subscriber_id))throw ApiError.invalidRequest('This cart can no longer be recovered');
  const [cart]=await c.var.db.query<{id:string;expires_at:string}>(`SELECT c.id,c.expires_at FROM carts c JOIN marketing_subscribers s ON lower(c.customer_email)=s.email WHERE c.id=? AND s.id=?`,[claims.cart_id,claims.subscriber_id]);
  if(!cart||Date.parse(cart.expires_at)<=Date.now())throw ApiError.invalidRequest('This cart has expired');
  const [checkout]=await c.var.db.query<{checkout_id:string}>('SELECT checkout_id FROM pod_checkouts WHERE cart_id=?',[cart.id]);
@@ -44,16 +46,30 @@ marketing.post('/recovery',async c=>{
 });
 marketing.use('*',async(c,next)=>{
  const token=c.env.MARKETING_BFF_TOKEN;
- if(c.req.method==='POST'&&c.req.path.endsWith('/subscribe')&&token&&token.length>=32){const encoder=new TextEncoder(),key=await crypto.subtle.importKey('raw',encoder.encode(token),{name:'HMAC',hash:'SHA-256'},false,['sign','verify']);if(await crypto.subtle.verify('HMAC',key,await crypto.subtle.sign('HMAC',key,encoder.encode('Bearer '+token)),encoder.encode(c.req.header('Authorization')||''))){await next();return;}}
+ if(c.req.method==='POST'&&['/subscribe','/contact','/link'].some(path=>c.req.path.endsWith(path))&&token&&token.length>=32){const encoder=new TextEncoder(),key=await crypto.subtle.importKey('raw',encoder.encode(token),{name:'HMAC',hash:'SHA-256'},false,['sign','verify']);if(await crypto.subtle.verify('HMAC',key,await crypto.subtle.sign('HMAC',key,encoder.encode('Bearer '+token)),encoder.encode(c.req.header('Authorization')||''))){await next();return;}}
  await authMiddleware(c,async()=>{await adminOnly(c,next);});
 });
 marketing.post('/subscribe',async c=>{
  if(c.env.MARKETING_ENABLED!=='true'||!c.env.MARKETING_POLICY_VERSION)throw ApiError.serviceUnavailable('Email registration is not available');
  return c.json(await c.var.db.marketingSubscribe(subscriptionInput.parse(await json(c.req.raw)),c.env.MARKETING_POLICY_VERSION));
 });
+marketing.post('/contact',async c=>{
+ const input=z.object({id:z.string().uuid(),email:z.string().trim().email().max(254),version:z.number().int().positive()}).strict().parse(await json(c.req.raw));
+ return c.json(await c.var.db.marketingContact(input.id,input.email,input.version));
+});
+marketing.post('/link',async c=>{const input=z.object({cart_id:z.string().uuid(),checkout_id:z.string().uuid()}).strict().parse(await json(c.req.raw));return c.json(await c.var.db.marketingLink(input.cart_id,input.checkout_id));});
+marketing.get('/admin/settings',async c=>c.json(await c.var.db.marketingSettings()));
+marketing.post('/admin/settings',async c=>c.json(await c.var.db.marketingSettingsSave(marketingPolicyInput.parse(await json(c.req.raw)),c.var.auth.sub||'admin')));
+marketing.get('/admin/jobs',async c=>{
+ await c.var.db.marketingInit();const state=z.enum(['pending','sending','accepted','delivered','unknown','dead','canceled']).optional().parse(c.req.query('state'));
+ const cursor=z.string().max(100).parse(c.req.query('cursor')||'');
+ return c.json({rows:await c.var.db.query('SELECT id,email,kind,state,attempts,due_at,provider_id,delivery_status,updated_at FROM marketing_jobs WHERE id>?'+(state?' AND state=?':'')+' ORDER BY id LIMIT 51',state?[cursor,state]:[cursor])});
+});
+marketing.post('/admin/jobs/:id/decision',async c=>c.json(await c.var.db.marketingJobDecision(z.string().uuid().parse(c.req.param('id')),marketingJobDecision.parse(await json(c.req.raw)),c.var.auth.sub||'admin')));
 marketing.get('/admin/overview',async c=>{
  await c.var.db.marketingInit();
  return c.json({subscribers:await c.var.db.query('SELECT status,count(*) count FROM marketing_subscribers GROUP BY status',[]),jobs:await c.var.db.query('SELECT kind,state,count(*) count FROM marketing_jobs GROUP BY kind,state',[]),
+  queue_health:(await c.var.db.query("SELECT SUM(CASE WHEN state='pending' AND due_at<? THEN 1 ELSE 0 END) overdue,SUM(CASE WHEN state IN ('unknown','dead') THEN 1 ELSE 0 END) needs_attention,MIN(CASE WHEN state='pending' THEN due_at END) oldest_due_at FROM marketing_jobs",[Date.now()-3600000]))[0],
   attributed_revenue:await c.var.db.query("SELECT o.currency,SUM(o.total_cents-COALESCE((SELECT SUM(r.amount_cents) FROM refunds r WHERE r.order_id=o.id AND r.currency=o.currency AND r.status='succeeded'),0)) net_revenue_minor,COUNT(*) orders FROM marketing_attribution a JOIN orders o ON o.id=a.order_id WHERE o.status IN ('paid','processing','shipped','delivered') AND (EXISTS(SELECT 1 FROM payment_receipts pr WHERE pr.order_id=o.id AND pr.amount_minor=o.total_cents AND pr.currency=o.currency) OR o.stripe_checkout_session_id IS NOT NULL OR EXISTS(SELECT 1 FROM commerce_orders c WHERE c.order_id=o.id AND c.payment_status='paid')) GROUP BY o.currency",[]),model:'last_click_7d_not_incremental_lift'});
 });
 

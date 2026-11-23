@@ -2,7 +2,8 @@ import {expireOpenCarts,repairLegacyReservationDeficits} from './lib/cart-mainte
 import {ensureCartItemCurrency,ensureOrderCheckoutSchema} from './lib/cart-schema';
 import {STOREFRONT_MIGRATION_SCHEMA,importStorefrontCatalog,provisionStorefrontAccess} from './lib/storefront-migration';
 import {beginBankPayment,verifyBankPayment,closeBankPayment} from './lib/checkout-payments';
-import {recoverCheckoutMarketing} from './lib/checkout-marketing';
+import {recoverCheckoutMarketing,saveMarketingContact,linkMarketingCheckout} from './lib/checkout-marketing';
+import {marketingPolicy,saveMarketingPolicy,decideMarketingJob} from './lib/marketing-policy';
 import {saveCheckoutCarrier} from './lib/checkout-carrier';
 import {checkoutReadiness} from './lib/checkout-readiness';
 import {ShippingError} from './lib/smart-shipping';
@@ -37,7 +38,7 @@ import * as shippingFlow from './lib/shipping-workflow';
 import { DurableObject } from 'cloudflare:workers';
 import { UCP_PAYMENT_SCHEMA, beginUcpPayment, attachUcpPayment, expireUcpPayment, settleUcpPayment, type SettlementInput } from './lib/ucp-payment';
 import {POD_SCHEMA,approvePodArtwork,reviewPodArtwork,savePodMappingDraft,podQuotePlan,storePodQuote,checkoutPodQuote,claimPodFulfillment,finishPodFulfillment,type PodQuoteInput} from './lib/pod-core';
-import {MARKETING_SCHEMA,subscribeMarketing,confirmMarketing,unsubscribeMarketing,planMarketing,claimMarketing,marketingEligible,finishMarketing,recordMarketingEvent,type SubscriptionInput} from './lib/marketing-core';
+import {MARKETING_SCHEMA,subscribeMarketing,confirmMarketing,unsubscribeMarketing,planMarketing,claimMarketing,marketingEligible,finishMarketing,recordMarketingEvent,legacyMarketingRecoverable,type SubscriptionInput} from './lib/marketing-core';
 import {FEED_SCHEMA,feedSnapshot,putFeedOffer,type FeedOffer} from './lib/product-feeds';
 import {SHOPPING_SCHEMA,consumeShopping,allowShoppingAi,type ShoppingSelection} from './lib/shopping';
 import { STOREFRONT_CONTENT_SCHEMA } from './lib/storefront-content';
@@ -1453,6 +1454,12 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
   shoppingConsume(id:string,selection:ShoppingSelection,expiresAt:number){this.podInit();ensureSchemaObjects(this.sql,FEED_SCHEMA);ensureSchemaObjects(this.sql,SHOPPING_SCHEMA);return this.ctx.storage.transactionSync(()=>consumeShopping(this.sql,feedSnapshot(this.sql).offers,id,selection,expiresAt));}
   feedPut(sku:string,config:FeedOffer,storeUrl:string){this.podInit();ensureSchemaObjects(this.sql,FEED_SCHEMA);return this.ctx.storage.transactionSync(()=>putFeedOffer(this.sql,sku,config,storeUrl));}
   marketingInit(){this.checkoutInit();ensureSchemaObjects(this.sql,MARKETING_SCHEMA);ensureSchemaObjects(this.sql,EXPERIMENT_SCHEMA);}
+  marketingSettings(){this.marketingInit();return marketingPolicy(this.sql);}
+  marketingLegacyRecoverable(cartId:string,subscriberId:string){this.marketingInit();return legacyMarketingRecoverable(this.sql,cartId,subscriberId);}
+  marketingSettingsSave(raw:unknown,actor:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>saveMarketingPolicy(this.sql,raw,actor));}
+  marketingJobDecision(id:string,raw:unknown,actor:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>decideMarketingJob(this.sql,id,raw,actor));}
+  marketingContact(id:string,email:string,version:number){this.marketingInit();return this.ctx.storage.transactionSync(()=>saveMarketingContact(this.sql,id,email,version));}
+  marketingLink(cartId:string,checkoutId:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>linkMarketingCheckout(this.sql,cartId,checkoutId));}
   marketingRecoverCheckout(id:string,subscriberId:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>recoverCheckoutMarketing(this.sql,id,subscriberId));}
   marketingRfm(cursor:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>marketingRfm(this.sql,cursor));}
   marketingExperiment(raw:Parameters<typeof createExperiment>[1]){this.marketingInit();return this.ctx.storage.transactionSync(()=>createExperiment(this.sql,raw));}

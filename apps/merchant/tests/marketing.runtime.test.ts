@@ -31,6 +31,11 @@ test('real Worker/DO deduplicates subscriptions, revokes a leased send and expor
   const subscription={email:'new@example.test',consent:true,source:'popup',policy_version:'v1',rate_key:'c'.repeat(64)};const register=await worker.fetch('http://localhost/v1/marketing/subscribe',{method:'POST',headers:{Authorization:'Bearer '+'m'.repeat(40),'Content-Type':'application/json'},body:JSON.stringify(subscription)});assert.equal(register.status,200);assert.equal((await worker.fetch('http://localhost/v1/marketing/admin/overview',{headers:{Authorization:'Bearer '+'m'.repeat(40)}})).status,401);
   const jsonl=await worker.fetch('http://localhost/v1/feeds/openai.jsonl');assert.equal(jsonl.status,200);assert.equal(JSON.parse(await jsonl.text()).price,'25.00 USD');
   const admin={Authorization:'Bearer sk_feed_test'};
+ const settings=await worker.fetch('http://localhost/v1/marketing/admin/settings',{headers:admin});assert.equal(settings.status,200);assert.equal((await settings.json() as any).post_purchase_after_days,3);
+ assert.equal((await worker.fetch('http://localhost/v1/marketing/admin/settings',{headers:{Authorization:'Bearer '+'m'.repeat(40)}})).status,401);
+ const changed=await worker.fetch('http://localhost/v1/marketing/admin/settings',{method:'POST',headers:{...admin,'Content-Type':'application/json'},body:JSON.stringify({win_back:false,daily_cap:2})});assert.equal(changed.status,200);assert.equal((await changed.json() as any).win_back,false);
+ assert.equal((await worker.fetch('http://localhost/v1/marketing/admin/jobs?state=unknown',{headers:admin})).status,200);
+ assert.equal((await worker.fetch('http://localhost/v1/marketing/contact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:crypto.randomUUID(),email:'buyer@example.test',version:1})})).status,401);
  assert.equal((await worker.fetch('http://localhost/v1/feeds/admin/offers')).status,401);
  assert.equal((await worker.fetch('http://localhost/v1/feeds/admin/offers',{headers:{Authorization:'Bearer pk_feed_test'}})).status,403);
  const listing=await worker.fetch('http://localhost/v1/feeds/admin/offers',{headers:admin});assert.equal(listing.status,200);assert.equal((await listing.json() as any).items[0].sku,'SHIRT');

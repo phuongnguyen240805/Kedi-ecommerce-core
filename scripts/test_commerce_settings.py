@@ -4,6 +4,22 @@ import tempfile
 import unittest
 spec=importlib.util.spec_from_file_location('settings',Path(__file__).with_name('append-commerce-settings.py'));settings=importlib.util.module_from_spec(spec);spec.loader.exec_module(settings)
 class CommerceSettingsTests(unittest.TestCase):
+ def test_marketing_bridge_and_provider_settings_survive_deployment_append(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   p=Path(tmp)/'settings.env'
+   values={'MARKETING_BFF_TOKEN':'fixture_bridge_'+'a'*40,'MAILGUN_WEBHOOK_SIGNING_KEY':'fixture_signing','MARKETING_MAILGUN_DOMAIN':'mg.example.test','MARKETING_MAILGUN_BASE_URL':'https://api.eu.mailgun.net','MARKETING_FROM_EMAIL':'KediMuse <hello@mg.example.test>','MARKETING_CONTACT_ADDRESS':'Example business address','MARKETING_POLICY_VERSION':'email-v1','MARKETING_ENABLED':'false','MARKETING_SEND_ENABLED':'false','STORE_PUBLIC_API_URL':'https://merchant.example.test'}
+   self.assertEqual(settings.append_settings(p,values),len(values))
+   for key,value in values.items():self.assertIn(key+'='+value,p.read_text())
+   before=p.read_text()
+   with self.assertRaises(ValueError):settings.append_settings(p,{'MARKETING_BFF_TOKEN':'bad\nINJECTED=1'})
+   self.assertEqual(p.read_text(),before)
+ def test_marketing_bridge_is_wired_from_github_secret_and_examples_start_disabled(self):
+  root=Path(__file__).resolve().parents[1]
+  workflow=(root/'.github/workflows/create-env-artifact.yaml').read_text(encoding='utf-8')
+  self.assertIn('MARKETING_BFF_TOKEN: ${{ secrets.MARKETING_BFF_TOKEN }}',workflow)
+  example=(root/'apps/merchant/.env.marketing.example').read_text(encoding='utf-8')
+  for value in ['MARKETING_ENABLED=false','MARKETING_SEND_ENABLED=false','MARKETING_BFF_TOKEN=','MAILGUN_WEBHOOK_SIGNING_KEY=']:
+   self.assertIn(value,example)
  def test_shell_metacharacters_remain_literal_and_unknown_keys_are_not_imported(self):
   with tempfile.TemporaryDirectory() as tmp:
    p=Path(tmp)/'settings.env';value='Business $literal "quotes" '+chr(96)+'text'+chr(96)

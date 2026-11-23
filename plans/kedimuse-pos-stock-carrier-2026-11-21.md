@@ -18,7 +18,13 @@ Checkout chuẩn bổ sung tỉnh/quận/phườngGHN, phí thực có thời h�
 
 ## Kiểm thử và giới hạn
 
-Backend201/201 test và typecheck đạt; test stock-only bảo toàn dữ liệu/reservation, currencycart và HTTPWorker/DO carrier quote binding/expiry/context/pay safety. Python deployment-settings3/3 đạt. Kết quả FE/browser/deploy ghi bổ sung sau phát hành.
+Backend203/203 test và typecheck đạt (bản sửa b43c45f); test stock-only bảo toàn dữ liệu/reservation, currencycart và HTTPWorker/DO carrier quote binding/expiry/context/pay safety. Python deployment-settings3/3 đạt. FE316/316 test,17/17 browser, boundary/typecheck/lint/OpenNext build đạt. FE e380b97 đã deploy phiên bản d85a7ce6-6225-4b2b-b8c3-51206d087869 và CI xanh; remote main41e6531 còn merge UI từ chat khác, đã giữ nguyên. BEa3346ca và các commit trước đã CI/deploy xanh.
 
 Còn chờ người dùng cho phép ghi GHN_TOKEN/CARRIER_SECRETS_JSON vào GitHub Actions secrets của Kedi-ecommerce-core và bật carrier settings production. Automatic approval review đã từ chối lệnh vì cần xác nhận đích lưu khóa và cấu hình production; lệnh chưa chạy. Không dùng cách khác để ghi những khóa này. Tạo địa điểmGHN mới cũng chưa được thực hiện. Các câu hỏi pending không đồng nghĩa đã được phê duyệt.
 
+
+## Kiểm tra web thật và database cũ
+
+Browser production xác nhận Buy Now được bật theo tồnPOS nhưng thêm giỏ gặp500. Tail đã lọc request headers cho thấy database cũ thiếu cart_items.currency; schema CREATE TABLE IF NOT EXISTS không cập nhật bảng đã tồn tại. Bản b43c45f bổ sung migration chạy trong transaction trước nhận request, backfill theo currency của từng cart, giữ nguyên dòng/giá/tổng và chạy lại idempotent. Fixture cũ có cảVND/USD đã được kiểm thử;203/203 test backend đạt. Chờ kiểm tra lại PDP→cart→draft sau deploy; không coi test browser mock là bằng chứng toàn luồng production.
+
+Stock-only giữ trừ số hàng Fufuni đã paid/consumed chưa đối soát vềPOS, không cộng trả vào tồn ở lần sync tiếp theo; reserved khác được bảo toàn. Đây là khấu trừ bảo thủ, cần hoàn thiện cơ chế xác nhận đồng bộ POS trước khi tự giải phóng paid debit.
