@@ -18,6 +18,15 @@ export const checkoutInput=z.object({payment_method:z.enum(['stripe','techcomban
 export type CheckoutInput=z.infer<typeof checkoutInput>;
 export type CheckoutSnapshot=ReturnType<typeof quoteCheckout>;
 const fail=(code:string,message:string,status=409):never=>{throw new ShippingError(code,status,message);};
+function checkoutImage(sql:ShippingSql,variant:Record<string,unknown>){
+ const candidates=[variant.image_url,variant.thumbnail_url,variant.product_image];
+ if(!candidates.some(Boolean)&&sql.exec("SELECT name FROM sqlite_master WHERE name='storefront_content'").toArray().length){
+  const [row]=sql.exec("SELECT data FROM storefront_content WHERE kind='product-metadata' AND id=?",variant.product_id).toArray();
+  if(row){try{candidates.push(JSON.parse(String(row.data)).source_image_url);}catch{/* Invalid optional display metadata must not break checkout. */}}
+ }
+ for(const value of candidates){if(typeof value!=='string')continue;try{const url=new URL(value);if(url.protocol==='https:'&&!url.username&&!url.password)return url.href;}catch{/* Try the next store-owned image. */}}
+ return null;
+}
 export function taxRate(sql:ShippingSql,country:string|undefined,code:string|null){
  const rates=sql.exec("SELECT * FROM tax_rates WHERE status='active' AND (country_code=? OR country_code IS NULL) AND (tax_code=? OR tax_code IS NULL)",country||'',code).toArray();
  const score=(r:Record<string,unknown>)=>(r.country_code===country?2:0)+(r.tax_code===code&&code!==null?1:0);
@@ -41,7 +50,7 @@ export function quoteCheckout(sql:ShippingSql,raw:CheckoutInput,owner?:string){
   const price=money.positive().parse(v.resolved_price),rate=input.address&&regions.length?taxRate(sql,input.address.country,v.tax_code as string|null):0;
   const unit=inclusive?Math.round(price/(1+rate/100)):price,net=money.parse(unit*line.quantity),lineTax=money.parse(inclusive?price*line.quantity-net:Math.round(net*rate/100));subtotal+=net;tax+=lineTax;
   if(v.requires_shipping!==0){physical=true;if(!Number.isFinite(v.weight_g)||Number(v.weight_g)<=0)messages.push({code:'weight_missing',content:'The merchant must configure product shipping weight'});weight+=Number(v.weight_g||0)*line.quantity;if(v.shipping_class_id||v.product_shipping_class)messages.push({code:'shipping_context_required',content:'This product needs a merchant shipping quote'});}
-  return {id:String(v.id),sku:String(v.sku),title:String(v.title||v.product_title),product_title:String(v.product_title),variant_title:String(v.title||v.sku),image_url:typeof v.product_image==='string'?v.product_image:null,quantity:line.quantity,unit_price:unit,display_unit_price:price,subtotal:net,tax:lineTax,total:net+lineTax,requires_shipping:v.requires_shipping!==0};
+  return {id:String(v.id),sku:String(v.sku),title:String(v.title||v.product_title),product_title:String(v.product_title),variant_title:String(v.title||v.sku),image_url:checkoutImage(sql,v),quantity:line.quantity,unit_price:unit,display_unit_price:price,subtotal:net,tax:lineTax,total:net+lineTax,requires_shipping:v.requires_shipping!==0};
  });
  if(physical&&!input.address)messages.push({code:'address_required',content:'Enter your delivery address'});
  if(physical&&input.address&&!regions.length)messages.push({code:'destination_unavailable',content:'This destination is not configured for this currency'});

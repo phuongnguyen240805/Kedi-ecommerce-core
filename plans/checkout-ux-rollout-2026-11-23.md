@@ -10,7 +10,7 @@
 
 ## Phase 2 — Tóm tắt sản phẩm và chuyển khoản QR
 
-- Backend bổ sung tên sản phẩm, tên biến thể và ảnh từ catalog chính thức; payload khách không thể tự đưa metadata vào báo giá. FE giữ tương thích các snapshot cũ.
+- Backend bổ sung tên sản phẩm, tên biến thể và ảnh từ catalog chính thức (ưu tiên biến thể/thumbnail, rồi ảnh sản phẩm hoặc metadata hiển thị của cửa hàng); payload khách không thể tự đưa metadata vào báo giá. FE giữ tương thích các snapshot cũ.
 - FE hiển thị tên, ảnh nếu có, màu/size, số lượng và tiền hàng. Chỉ nhận URL ảnh HTTPS không có credentials.
 - QR có nút sao chép tài khoản, số tiền nguyên và nội dung; báo sao chép thành công/thất bại. Đồng hồ chỉ là thông tin giao diện, không phải bằng chứng trả tiền.
 - QR hết hạn tự ẩn hình và vô hiệu nút sao chép; giữ thông tin hướng dẫn kiểm tra khoản đã gửi. Không thêm nút tự nhận đã thanh toán.
@@ -29,8 +29,8 @@
 
 ## Kiểm thử phát hành
 
-- Backend **218/218 xanh** + typecheck; frontend Jest + typecheck/lint/boundaries + OpenNext production build xanh.
-- Browser suite: **21/21 xanh**, gồm báo giá tự động tuần tự, sửa địa chỉ trong lúc request đang chạy, COD đổi phí, quote hết hạn, radio chủ động, Việt/Anh sau reload, sao chép QR, đổi phương thức, cart handoff và AI shopping không auto-pay.
+- Backend **219/219 xanh** + typecheck; frontend Jest + typecheck/lint/boundaries + OpenNext production build xanh.
+- Browser suite: **22/22 xanh**, gồm báo giá tự động tuần tự, sửa địa chỉ trong lúc request đang chạy, COD đổi phí, quote hết hạn, chặn thiếu điện thoại nội địa, radio chủ động, Việt/Anh sau reload, sao chép QR, đổi phương thức, cart handoff và AI shopping không auto-pay.
 - Frontend regression: **331/331 xanh**. Backend có thêm regression cho snapshot cũ không có metadata ảnh, đồng thời vẫn chặn thay đổi giá thật.
 - Chỉ push/deploy sau khi bộ kiểm thử tương ứng xanh; nghiệm thu production bằng dữ liệu TEST NO SHIPPING, không chuyển tiền và không tạo vận đơn.
 
