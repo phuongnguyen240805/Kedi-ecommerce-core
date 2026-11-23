@@ -9,6 +9,7 @@ import {saveCheckoutCarrier} from './lib/checkout-carrier';
 import {checkoutReadiness} from './lib/checkout-readiness';
 import {ShippingError} from './lib/smart-shipping';
 import {CHECKOUT_SCHEMA,checkoutInput,checkoutRead,checkoutSave,checkoutCommand,checkoutCancel,type CheckoutInput as RetailCheckoutInput} from './lib/checkout-core';
+import {changeCheckoutPayment} from './lib/checkout-payment-change';
 import {EXPERIMENT_SCHEMA,createExperiment,marketingRfm,experimentReport} from './lib/marketing-admin';
 import * as shippingFlow from './lib/shipping-workflow';
 /**
@@ -1425,6 +1426,7 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
   checkoutRpc(command:import('./lib/checkout-core').CheckoutRpcCommand):import('./lib/checkout-core').CheckoutRpcResult{
     try{let value:ReturnType<typeof checkoutRead>;switch(command.action){
      case 'get':value=this.checkoutGet(command.id);break;
+     case 'change-payment':this.checkoutInit();value=this.ctx.storage.transactionSync(()=>changeCheckoutPayment(this.sql,command.id,command.version,command.expiredStripeId));break;
      case 'create':value=this.checkoutCreate(command.input,command.source,command.key);break;
      case 'update':value=this.checkoutUpdate(command.id,command.patch,command.source,command.key,command.version,command.browser);break;
      case 'cancel':value=this.checkoutCancel(command.id,command.source,command.key);break;

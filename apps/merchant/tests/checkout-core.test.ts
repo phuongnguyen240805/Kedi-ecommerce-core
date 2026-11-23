@@ -1,6 +1,8 @@
 import {MARKETING_SCHEMA,subscribeMarketing,confirmMarketing,planMarketing,marketingEligible} from '../src/lib/marketing-core';
 import {recoverCheckoutMarketing,sharedCheckoutRecoverable} from '../src/lib/checkout-marketing';
 import {checkoutReadiness} from '../src/lib/checkout-readiness';
+import {changeCheckoutPayment} from '../src/lib/checkout-payment-change';
+import {beginBankPayment,verifyBankPayment} from '../src/lib/checkout-payments';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -9,6 +11,25 @@ import {CHECKOUT_SCHEMA,checkoutSave,checkoutRead,checkoutCommand,checkoutCancel
 import {POD_SCHEMA} from '../src/lib/pod-core';
 import {UCP_PAYMENT_SCHEMA,beginUcpPayment,attachUcpPayment,settleUcpPayment} from '../src/lib/ucp-payment';
 import type {ShippingSql} from '../src/lib/shipping-store';
+
+function qrChangeFixture(){const f=fixture();f.db.exec("UPDATE currencies SET code='VND';UPDATE countries SET code='VN';UPDATE tax_rates SET country_code='VN';UPDATE variants SET currency='VND'");const draft=f.tx(()=>checkoutSave(f.sql,{...f.input,currency:'VND',address:{...f.input.address!,country:'VN'}},'web'));const payment=f.tx(()=>beginBankPayment(f.sql,draft.id,{version:draft.version,total:draft.total},{account_number:'1234567890',account_name:'TEST MERCHANT'}));return {...f,draft,payment};}
+test('changing pending QR preserves buyer/items, releases only its hold and retries return one replacement; late money is reviewed',()=>{
+ const f=qrChangeFixture();assert.equal(f.db.prepare('SELECT reserved FROM inventory').get()!.reserved,4);
+ const next=f.tx(()=>changeCheckoutPayment(f.sql,f.draft.id,f.draft.version));
+ assert.equal(next.payment,null);assert.equal(next.order_id,null);assert.deepEqual(next.address,f.draft.address);assert.deepEqual(next.buyer,f.draft.buyer);assert.deepEqual(next.line_items,f.draft.line_items);assert.equal(next.selected_shipping_option_id,null);assert.equal(checkoutRead(f.sql,f.draft.id).status,'canceled');assert.equal(f.db.prepare('SELECT reserved FROM inventory').get()!.reserved,2);
+ assert.equal(f.tx(()=>changeCheckoutPayment(f.sql,f.draft.id,f.draft.version)).id,next.id);assert.equal(f.db.prepare('SELECT count(*) n FROM checkout_drafts').get()!.n,2);
+ const evidence={transaction_id:'late-bank-test',amount:f.draft.total,currency:'VND' as const,reference:f.payment.reference,account_number:'1234567890',received_at:new Date().toISOString(),evidence:'Late fixture bank transfer needs review'};
+ assert.equal(f.tx(()=>verifyBankPayment(f.sql,f.draft.id,evidence,'finance')).result,'manual_review');assert.equal(f.db.prepare('SELECT count(*) n FROM payment_receipts').get()!.n,0);f.db.close();
+});
+test('stale quote, bank evidence, paid checkout and confirmed COD cannot be switched by buyer',()=>{
+ for(const mutation of ['stale','evidence','paid','cod']){const f=qrChangeFixture();if(mutation==='evidence')f.db.prepare('INSERT INTO checkout_bank_evidence VALUES(?,?,?,?,?,?)').run('test',f.draft.id,'{}','finance','manual_review',new Date().toISOString());if(mutation==='paid')f.db.exec("UPDATE orders SET status='paid';UPDATE ucp_checkout_sessions SET status='completed'");if(mutation==='cod')f.db.exec("UPDATE checkout_payment_choices SET method='cod';UPDATE ucp_checkout_sessions SET status='completed'");assert.throws(()=>f.tx(()=>changeCheckoutPayment(f.sql,f.draft.id,mutation==='stale'?99:f.draft.version)));assert.equal(f.db.prepare('SELECT reserved FROM inventory').get()!.reserved,4);assert.equal(f.db.prepare('SELECT count(*) n FROM checkout_drafts').get()!.n,1);f.db.close();}
+});
+test('Stripe change requires bound provider closure and rolls back all changes when replacement cannot be quoted',()=>{
+ const f=fixture(),draft=f.tx(()=>checkoutSave(f.sql,f.input,'web'));f.tx(()=>beginUcpPayment(f.sql,draft.id,'https://shop.test/ok','https://shop.test/cancel'));f.tx(()=>attachUcpPayment(f.sql,draft.id,'cs_change','https://checkout.stripe.com/test'));
+ for(const proof of [undefined,'cs_foreign'])assert.throws(()=>f.tx(()=>changeCheckoutPayment(f.sql,draft.id,draft.version,proof)));
+ f.db.exec("UPDATE products SET status='draft'");assert.throws(()=>f.tx(()=>changeCheckoutPayment(f.sql,draft.id,draft.version,'cs_change')));assert.equal(checkoutRead(f.sql,draft.id).status,'complete_in_progress');assert.equal(f.db.prepare('SELECT reserved FROM inventory').get()!.reserved,4);
+ f.db.exec("UPDATE products SET status='active'");const next=f.tx(()=>changeCheckoutPayment(f.sql,draft.id,draft.version,'cs_change'));assert.notEqual(next.id,draft.id);assert.equal(f.db.prepare('SELECT reserved FROM inventory').get()!.reserved,2);f.db.close();
+});
 function fixture(){const db=new DatabaseSync(':memory:');db.exec(readFileSync(new URL('../src/do.ts',import.meta.url),'utf8').match(/const SCHEMA = `([\s\S]*?)`;/)![1]);db.exec(CHECKOUT_SCHEMA+POD_SCHEMA+UCP_PAYMENT_SCHEMA);const sql:ShippingSql={exec:(q,...p)=>{const rows=db.prepare(q).all(...p) as Record<string,unknown>[];return {toArray:()=>rows};}};
  db.exec("INSERT INTO currencies(id,code,display_name,decimal_places) VALUES('usd','USD','Dollar',2);INSERT INTO countries(id,code,display_name,country_name) VALUES('us','US','US','US');INSERT INTO regions(id,display_name,currency_id) VALUES('region','US','usd');INSERT INTO region_countries VALUES('region','us');INSERT INTO products(id,title) VALUES('product','Shirt');INSERT INTO variants(id,product_id,sku,title,price_cents,currency,weight_g) VALUES('variant','product','SHIRT','Shirt',2500,'USD',500);INSERT INTO inventory(id,sku,on_hand,reserved) VALUES('inventory','SHIRT',10,2);INSERT INTO shipping_rates(id,display_name,max_weight_g,max_delivery_days) VALUES('standard','Standard',5000,5);INSERT INTO shipping_rate_prices(id,shipping_rate_id,currency_id,amount_cents) VALUES('price','standard','usd',700);INSERT INTO region_shipping_rates VALUES('region','standard');INSERT INTO tax_rates(id,display_name,country_code,rate_percentage) VALUES('tax','Tax','US',10);");
  const input:CheckoutInput={currency:'USD',line_items:[{id:'SHIRT',quantity:2}],buyer:{email:'buyer@test.com'},address:{name:'Test Buyer',phone:'',line_one:'123 Test Street',line_two:'',city:'Test',state:'CA',country:'US',postal_code:'90001'},shipping_option_id:'standard'};

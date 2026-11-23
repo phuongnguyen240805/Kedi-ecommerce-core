@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS checkout_drafts(id TEXT PRIMARY KEY,source TEXT NOT N
 CREATE TABLE IF NOT EXISTS checkout_idempotency(scope TEXT NOT NULL,key TEXT NOT NULL,request_json TEXT NOT NULL,response_json TEXT NOT NULL,PRIMARY KEY(scope,key));
 CREATE TABLE IF NOT EXISTS checkout_reconcile_rates(id TEXT PRIMARY KEY,next_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS checkout_recoveries(original_id TEXT PRIMARY KEY,checkout_id TEXT NOT NULL UNIQUE);
+CREATE TABLE IF NOT EXISTS checkout_payment_changes(original_id TEXT PRIMARY KEY,replacement_id TEXT NOT NULL UNIQUE,previous_method TEXT NOT NULL,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS checkout_carrier_quotes(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,binding_json TEXT NOT NULL,options_json TEXT NOT NULL,context TEXT NOT NULL,expires_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS checkout_handoffs(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,created_at INTEGER NOT NULL);
 `;
@@ -75,5 +76,5 @@ export function checkoutCommand<T>(sql:ShippingSql,scope:string,key:string,raw:u
 }
 export function checkoutCancel(sql:ShippingSql,id:string,source:string){const current=checkoutRead(sql,id);if(current.source!==source)fail('checkout_not_found','Checkout not found',404);if(['complete_in_progress','completed'].includes(current.status))fail('checkout_locked','Payment must be reconciled before cancellation');sql.exec("UPDATE ucp_checkout_sessions SET status='canceled',updated_at=? WHERE id=?",new Date().toISOString(),id);return checkoutRead(sql,id);}
 
-export type CheckoutRpcCommand={action:'get';id:string}|{action:'create';input:CheckoutInput;source:string;key:string}|{action:'update';id:string;patch:Partial<CheckoutInput>;source:string;key:string;version?:number;browser?:boolean}|{action:'cancel';id:string;source:string;key:string}|{action:'redeem';id:string};
+export type CheckoutRpcCommand={action:'get';id:string}|{action:'change-payment';id:string;version:number;expiredStripeId?:string}|{action:'create';input:CheckoutInput;source:string;key:string}|{action:'update';id:string;patch:Partial<CheckoutInput>;source:string;key:string;version?:number;browser?:boolean}|{action:'cancel';id:string;source:string;key:string}|{action:'redeem';id:string};
 export type CheckoutRpcResult={ok:true;value:ReturnType<typeof checkoutRead>}|{ok:false;error:{code:string;status:number;message:string}};

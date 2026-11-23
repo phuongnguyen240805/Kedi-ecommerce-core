@@ -10,7 +10,8 @@ import {SignJWT,jwtVerify} from 'jose';
 import {authMiddleware,adminOnly} from '../middleware/auth';
 import {ApiError,type Env,type HonoEnv} from '../types';
 import {checkoutInput} from '../lib/checkout-core';
-import {startStripeCheckout,reconcileStripeCheckout} from '../lib/ucp-payment-service';
+import {startStripeCheckout,reconcileStripeCheckout,closeStripeForPaymentChange} from '../lib/ucp-payment-service';
+import {paymentChangeAvailability} from '../lib/checkout-payment-change';
 import {storeApiBase} from '../lib/stores';
 export const checkouts=new Hono<HonoEnv>();
 async function physicalCatalog(db:import('../types').DOStub){await db.podInit();return db.query<{sku:string;title:string;unit_price:number;currency:string;available:number}>(`SELECT v.sku,v.title,vp.price_cents unit_price,cur.code currency,MAX(0,COALESCE(i.on_hand-i.reserved,0)) available FROM variants v JOIN products p ON p.id=v.product_id JOIN variant_prices vp ON vp.variant_id=v.id JOIN currencies cur ON cur.id=vp.currency_id LEFT JOIN inventory i ON i.sku=v.sku WHERE v.status='active' AND p.status='active' AND cur.status='active' AND v.requires_shipping=1 AND v.weight_g>0 AND vp.price_cents>0 AND COALESCE(i.on_hand-i.reserved,0)>0 AND NOT EXISTS(SELECT 1 FROM pod_mappings pm WHERE pm.sku=v.sku AND json_extract(pm.config,'$.enabled')=1) ORDER BY v.sku,cur.code LIMIT 500`,[]);}
@@ -63,7 +64,19 @@ checkouts.post('/handoff',async c=>{
  let id:string;try{const {payload}=await jwtVerify(token,new TextEncoder().encode(c.env.ORDER_TOKEN_SECRET),{algorithms:['HS256'],requiredClaims:['exp','iat','jti']});if(payload.purpose!=='checkout-handoff'||payload.store_id!==(c.env.STORE_ID||'default')||payload.jti!==payload.session_id)throw Error();id=z.string().uuid().parse(payload.session_id);}catch{throw ApiError.invalidRequest('Invalid or expired handoff');}
  return c.json(await callCheckout(c.var.db,{action:'redeem',id}));
 });
-checkouts.get('/:id/methods',async c=>{const current=await callCheckout(c.var.db,{action:'get',id:z.string().uuid().parse(c.req.param('id'))});return c.json(checkoutMethods(current,c.env,current.payment?.method||null));});
+checkouts.get('/:id/methods',async c=>{const current=await callCheckout(c.var.db,{action:'get',id:z.string().uuid().parse(c.req.param('id'))});return c.json({...checkoutMethods(current,c.env,current.payment?.method||null),...paymentChangeAvailability(current)});});
+checkouts.post('/:id/change-payment',async c=>{
+ const id=z.string().uuid().parse(c.req.param('id'));
+ const parsed=z.object({version:z.number().int().positive(),confirmed_no_payment:z.literal(true)}).strict().safeParse(await c.req.json());
+ if(!parsed.success)throw ApiError.invalidRequest('Xác nhận chưa thanh toán trước khi đổi phương thức.');
+ const input=parsed.data;
+ const state=await callCheckout(c.var.db,{action:'get',id});
+ const [previous]=await c.var.db.query<{replacement_id:string}>('SELECT replacement_id FROM checkout_payment_changes WHERE original_id=?',[id]);
+ if(previous)return c.json(await callCheckout(c.var.db,{action:'get',id:previous.replacement_id}));
+ if(state.version!==input.version||!paymentChangeAvailability(state).change_allowed)throw ApiError.conflict('Đơn đã thay đổi hoặc đang xử lý. Kiểm tra trạng thái, không thanh toán lại.');
+ const expiredStripeId=state.payment?.method==='stripe'?await closeStripeForPaymentChange(c.var.db,c.env,id):undefined;
+ return c.json(await callCheckout(c.var.db,{action:'change-payment',id,version:input.version,expiredStripeId}));
+});
 checkouts.get('/:id',async c=>c.json(await callCheckout(c.var.db,{action:'get',id:z.string().uuid().parse(c.req.param('id'))})));
 checkouts.post('/:id/quote',async c=>{
  const id=z.string().uuid().parse(c.req.param('id')),key=z.string().uuid().parse(c.req.header('Idempotency-Key'));
