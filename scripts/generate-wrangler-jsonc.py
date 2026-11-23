@@ -34,7 +34,7 @@ def strip_jsonc_comments(text: str) -> str:
     return tokens.sub(lambda match: match.group(0) if match.group(0).startswith('"') else ' ', text)
 
 # Deployment credentials configure CI only; do not grant them to deployed application code.
-CI_ONLY_KEYS = {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "KV_CACHE_ID", "CLOUDFLARE_USE_PAGE_DEV_DOMAIN"}
+CI_ONLY_KEYS = {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "KV_CACHE_ID", "CLOUDFLARE_USE_PAGE_DEV_DOMAIN", "POD_R2_BUCKET_NAME"}
 
 def runtime_secrets(env):
     return {key: value for key, value in env.items() if key not in CI_ONLY_KEYS and value.strip()}
@@ -108,6 +108,20 @@ def main():
         if not any(ns.get("binding") == "KV_CACHE" for ns in kv_namespaces):
             kv_namespaces.append({"binding": "KV_CACHE", "id": kv_cache_id})
     wrangler_config["kv_namespaces"] = kv_namespaces
+
+    # Explicit opt-in only: a deployment without R2 activation never provisions a bucket.
+    # Limit this binding to the commerce Worker; MCP does not receive private artwork access.
+    pod_bucket = env_vars.get('POD_R2_BUCKET_NAME', '').strip()
+    if pod_bucket and wrangler_config.get('name') == 'merchant':
+        if not re.fullmatch(r'[a-z0-9][a-z0-9-]{1,61}[a-z0-9]', pod_bucket):
+            raise ValueError('Invalid POD R2 bucket name')
+        buckets = [dict(bucket) for bucket in wrangler_config.get('r2_buckets', [])]
+        image = next((bucket for bucket in buckets if bucket.get('binding') == 'IMAGES'), None)
+        if image and image.get('bucket_name') != pod_bucket:
+            raise ValueError('POD R2 bucket conflicts with existing IMAGES binding')
+        if not image:
+            buckets.append({'binding': 'IMAGES', 'bucket_name': pod_bucket})
+        wrangler_config['r2_buckets'] = buckets
 
     # Set routes based on page-dev flag and domain name.
     # Skipped when --skip-routes is passed (e.g. for the MCP worker on workers.dev).

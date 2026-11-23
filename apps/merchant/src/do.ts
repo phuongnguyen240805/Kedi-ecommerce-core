@@ -40,6 +40,7 @@ import * as shippingFlow from './lib/shipping-workflow';
 import { DurableObject } from 'cloudflare:workers';
 import { UCP_PAYMENT_SCHEMA, beginUcpPayment, attachUcpPayment, expireUcpPayment, settleUcpPayment, type SettlementInput } from './lib/ucp-payment';
 import {POD_SCHEMA,approvePodArtwork,reviewPodArtwork,savePodMappingDraft,podQuotePlan,storePodQuote,checkoutPodQuote,claimPodFulfillment,finishPodFulfillment,type PodQuoteInput} from './lib/pod-core';
+import {POD_V2_SCHEMA,podV2Command,type PodV2Command} from './lib/pod-v2-store';
 import {MARKETING_SCHEMA,subscribeMarketing,confirmMarketing,unsubscribeMarketing,planMarketing,claimMarketing,marketingEligible,finishMarketing,recordMarketingEvent,type SubscriptionInput} from './lib/marketing-core';
 import {FEED_SCHEMA,feedSnapshot,putFeedOffer,type FeedOffer} from './lib/product-feeds';
 import {SHOPPING_SCHEMA,consumeShopping,allowShoppingAi,type ShoppingSelection} from './lib/shopping';
@@ -1454,6 +1455,8 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
   checkoutCancel(id:string,source:string,key:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>checkoutCommand(this.sql,source+':cancel:'+id,key,{},()=>checkoutCancel(this.sql,id,source)));}
   checkoutRedeem(id:string){this.checkoutInit();return this.ctx.storage.transactionSync(()=>{const current=checkoutRead(this.sql,id);if(current.claimed||['expired','canceled','completed','complete_in_progress'].includes(current.status))throw new ShippingError('handoff_closed',409,'Handoff is no longer available');this.sql.exec('INSERT INTO checkout_handoffs VALUES(?,?,?)',id,id,Date.now());this.sql.exec('UPDATE checkout_drafts SET claimed=1 WHERE id=?',id);return checkoutRead(this.sql,id);});}
   podInit() { this.ensureInitialized(); ensureSchemaObjects(this.sql,POD_SCHEMA); }
+  podV2Init(){this.podInit();ensureSchemaObjects(this.sql,POD_V2_SCHEMA);}
+  podV2(command:PodV2Command){this.podV2Init();return this.ctx.storage.transactionSync(()=>podV2Command(this.sql,command));}
   feedSnapshot(){this.podInit();ensureSchemaObjects(this.sql,FEED_SCHEMA);return this.ctx.storage.transactionSync(()=>feedSnapshot(this.sql));}
   shoppingAiAllow(client:string){this.ensureInitialized();ensureSchemaObjects(this.sql,SHOPPING_SCHEMA);return this.ctx.storage.transactionSync(()=>allowShoppingAi(this.sql,client));}
   shoppingConsume(id:string,selection:ShoppingSelection,expiresAt:number){this.podInit();ensureSchemaObjects(this.sql,FEED_SCHEMA);ensureSchemaObjects(this.sql,SHOPPING_SCHEMA);return this.ctx.storage.transactionSync(()=>consumeShopping(this.sql,feedSnapshot(this.sql).offers,id,selection,expiresAt));}
@@ -1471,7 +1474,7 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
   marketingEligible(id:string,token:string){this.marketingInit();return marketingEligible(this.sql,id,token);}
   marketingFinish(id:string,token:string,outcome:Parameters<typeof finishMarketing>[3],providerId?:string){this.marketingInit();return this.ctx.storage.transactionSync(()=>finishMarketing(this.sql,id,token,outcome,providerId));}
   marketingEvent(input:Parameters<typeof recordMarketingEvent>[1]){this.marketingInit();return this.ctx.storage.transactionSync(()=>recordMarketingEvent(this.sql,input));}
-  podDue() { this.podInit();return this.sql.exec("SELECT id FROM pod_fulfillments WHERE (state IN ('queued','accepted','in_production','shipped','submission_unknown') OR (state='needs_review' AND external_id IS NOT NULL)) AND lease_until<? AND updated_at<? ORDER BY updated_at LIMIT 10",Date.now(),Date.now()-60_000).toArray().map(r=>({id:String(r.id)})); }
+  podDue() { this.podInit();return this.sql.exec("SELECT id FROM pod_fulfillments WHERE (state IN ('queued','accepted','in_production','partially_shipped','shipped','submission_unknown') OR (state='needs_review' AND external_id IS NOT NULL)) AND lease_until<? AND updated_at<? ORDER BY updated_at LIMIT 10",Date.now(),Date.now()-60_000).toArray().map(r=>({id:String(r.id)})); }
   podApprove(id:string,evidence:string) {this.podInit();return this.ctx.storage.transactionSync(()=>approvePodArtwork(this.sql,id,evidence));}
   podReview(id:string,evidence:string,approve:boolean) {this.podInit();return this.ctx.storage.transactionSync(()=>reviewPodArtwork(this.sql,id,evidence,approve));}
   podSaveDraft(sku:string,config:unknown,actor:string) {this.podInit();return this.ctx.storage.transactionSync(()=>savePodMappingDraft(this.sql,sku,config,actor));}

@@ -10,9 +10,12 @@ import {startStripeCheckout} from '../lib/ucp-payment-service';
 import {processPodFulfillment} from '../lib/pod-runner';
 import {inspectPodPng} from '../lib/pod-artwork';
 import {printifyAdmin} from './printify-admin';
+import {podV2AdminRouter,podV2PublicRouter} from './pod-v2';
+import type {StagedPrintifyClient} from '../lib/pod-v2-printify';
 
-export function createPodRouter(deps:{provider?:PrintifyClient;stripe?:typeof startStripeCheckout}={}){
+export function createPodRouter(deps:{provider?:PrintifyClient;stagedProvider?:StagedPrintifyClient;stripe?:typeof startStripeCheckout}={}){
 const pod=new Hono<HonoEnv>();
+pod.route('/v2',podV2PublicRouter());
 pod.get('/status',c=>c.json({enabled:c.env.POD_ENABLED==='true',provider:'printify',production_enabled:c.env.POD_SUBMIT_ENABLED==='true'&&c.env.POD_ACCOUNT_AUTOMATION_VERIFIED==='true'}));
 pod.get('/assets/:id',async c=>{
  try{
@@ -32,6 +35,7 @@ pod.use('*',async(c,next)=>{
  if(c.env.POD_ENABLED!=='true')return c.json({error:'POD is disabled for this store'},503);
  await c.var.db.podInit();c.header('Cache-Control','private, no-store');await next();
 });
+pod.route('/v2',podV2AdminRouter({provider:deps.stagedProvider,stripe:deps.stripe}));
 async function json(c:{req:{raw:Request}}){
  const reader=c.req.raw.body?.getReader();if(!reader)throw ApiError.invalidRequest('JSON required');
  const chunks:Uint8Array[]=[];let size=0;
@@ -46,9 +50,8 @@ pod.post('/carts',async c=>{
 });
 pod.get('/catalog',async c=>c.json({items:await c.var.db.query(`SELECT v.sku,v.title,p.image_url,vp.price_cents AS price_minor,'USD' AS currency FROM pod_mappings m JOIN variants v ON v.sku=m.sku JOIN products p ON p.id=v.product_id JOIN variant_prices vp ON vp.variant_id=v.id JOIN currencies cur ON cur.id=vp.currency_id AND cur.code='USD' WHERE v.status='active' AND p.status='active' AND json_extract(m.config,'$.enabled')=1 ORDER BY v.sku LIMIT 500`,[])}));
 pod.put('/mappings/:sku',async c=>{
- const config=podMapping.parse(await json(c)),version=crypto.randomUUID();
- await c.var.db.run('INSERT INTO pod_mappings VALUES(?,?,?) ON CONFLICT(sku) DO UPDATE SET version=excluded.version,config=excluded.config',[c.req.param('sku'),version,JSON.stringify(config)]);
- return c.json({version});
+ const config=podMapping.parse(await json(c));
+ return c.json(await c.var.db.podSaveDraft(c.req.param('sku'),config,c.var.auth.sub||c.var.auth.email||'admin-api-key'));
 });
 pod.post('/artworks',async c=>{
  if(!c.env.IMAGES)throw ApiError.serviceUnavailable('Artwork storage is not configured');
